@@ -11,7 +11,9 @@ import '../../api/client.dart' show ApiClient;
 import '../../models/server_profile.dart';
 import '../../providers/app_state.dart';
 import '../../services/agent_key_tester.dart';
+import '../../services/remote_gateway_installer.dart';
 import '../../utils/session_filter.dart';
+import '../../widgets/vps_gateway_wizard_dialog.dart';
 import '../onboarding/connection_welcome_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -33,11 +35,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _keysTestResult;
   bool _agentKeysExpanded = false;
 
-  /// Подсказки на экране подключения: Tailscale (клиент) vs SSH-сборка gateway на VPS.
+  /// Подсказки на экране подключения: Tailscale (клиент) vs SSH-install gateway на VPS.
   bool _connectViaTailscale = true;
 
-  static const _kPlanulixUpstream =
-      'https://github.com/pyatkovpetr/Planulix.git';
+  static const _kPlanulixInstallScript =
+      'https://raw.githubusercontent.com/pyatkovpetr/Planulix/main/scripts/install_gateway_remote.sh';
 
   @override
   void initState() {
@@ -100,17 +102,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return '''# На своём VPS (Linux) после SSH:
 ssh user@ваш-сервер-ip
 
-sudo apt update && sudo apt install -y golang-go git   # пример Debian/Ubuntu
+curl -fsSL $_kPlanulixInstallScript \\
+  | AUTH_TOKEN='замените-на-свой-секрет' bash -s
 
-git clone $_kPlanulixUpstream planulix
-cd planulix/server
-
-export AUTH_TOKEN='замените-на-свой-секрет'
-go build -o planulix .
-
-AUTH_TOKEN="\$AUTH_TOKEN" ./planulix
-# Слушает порт 8990. В этом приложении Server URL → http://<IP_или_TS>:8990/api
+# Скрипт скачает готовый бинарник из GitHub Releases и запустит сервис.
+# В этом приложении Server URL → http://<IP_или_TS>:8990/api
 ''';
+  }
+
+  Future<void> _openVpsInstallWizard() async {
+    final ok = await VpsGatewayWizardDialog.open(context);
+    if (!mounted || !ok) return;
+    final state = context.read<AppState>();
+    final api = state.api;
+    setState(() {
+      _urlController.text = api.baseUrl;
+      _tokenController.text = api.authToken ?? '';
+    });
   }
 
   Future<void> _showAddProfileDialog() async {
@@ -320,7 +328,7 @@ AUTH_TOKEN="\$AUTH_TOKEN" ./planulix
                 onSelected: (_) => setState(() => _connectViaTailscale = true),
               ),
               ChoiceChip(
-                label: const Text('SSH · сборка на сервере'),
+                label: const Text('SSH · авто-установка gateway'),
                 selected: !_connectViaTailscale,
                 onSelected: (_) => setState(() => _connectViaTailscale = false),
               ),
@@ -375,8 +383,8 @@ AUTH_TOKEN="\$AUTH_TOKEN" ./planulix
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Сначала на сервере: Go-код в каталоге server репозитория. '
-                    'Сервер требует AUTH_TOKEN в окружении — он же Bearer в клиенте.',
+                    'Мастер подключится по SSH, скачает готовый Linux-бинарник из GitHub Releases, '
+                    'запустит gateway как сервис и сохранит тот же AUTH_TOKEN в приложении.',
                     style: TextStyle(
                       fontSize: 13,
                       height: 1.35,
@@ -389,11 +397,31 @@ AUTH_TOKEN="\$AUTH_TOKEN" ./planulix
                       context,
                       _sshGatewaySetupCommands(),
                       subtitle:
-                          'Подставьте пользователя и IP. После сборки добавьте в клиент этот же токен.',
+                          'Подставьте пользователя, IP и токен. Скрипт скачает готовый бинарник и запустит сервис.',
                     ),
                     icon: const Icon(Icons.copy_all_outlined, size: 18),
                     label: const Text('Команды для SSH-сессии'),
                   ),
+                  if (remoteGatewayInstallSupported) ...[
+                    const SizedBox(height: 10),
+                    FilledButton.icon(
+                      onPressed: _openVpsInstallWizard,
+                      icon: const Icon(Icons.cloud_sync_outlined, size: 20),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF7c3aed),
+                      ),
+                      label: const Text('Подключить VPS по SSH — мастер'),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Обычно нужны только SSH-доступ и curl/tar. Если systemd недоступен, будет nohup fallback.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        height: 1.3,
+                        color: Color(0xFF94a3b8),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

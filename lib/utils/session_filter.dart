@@ -71,6 +71,13 @@ List<dynamic> applySessionQuery(Iterable<dynamic> sessions, String agentScope, S
   return applyListScope(applyAgentScope(sessions, agentScope), effectiveList);
 }
 
+bool _managedAgentIs(dynamic extra, bool Function(String a) predicate) {
+  if (extra is! Map) return false;
+  if (extra['planulixManaged'] != true) return false;
+  final a = (extra['agent'] ?? '').toString().toLowerCase().trim();
+  return predicate(a);
+}
+
 /// Apply the dashboard-style filter to a copy of [sessions] (single flat filter).
 List<dynamic> applySessionFilter(Iterable<dynamic> sessions, String filter) {
   var list = sessions.toList();
@@ -89,6 +96,15 @@ List<dynamic> applySessionFilter(Iterable<dynamic> sessions, String filter) {
       break;
     case 'Claude':
       list = list.where((s) {
+        final ex = s['extra'];
+        if (_managedAgentIs(
+          ex,
+          (a) =>
+              a == 'claude-code' ||
+              (a.contains('claude') && !a.contains('kimi')),
+        )) {
+          return true;
+        }
         final k = (s['kind'] ?? '').toString();
         final e = (s['entrypoint'] ?? '').toString();
         return k.isEmpty || k.contains('claude') || e.contains('claude') || e == 'cli';
@@ -105,6 +121,13 @@ List<dynamic> applySessionFilter(Iterable<dynamic> sessions, String filter) {
       break;
     case 'Kimi':
       list = list.where((s) {
+        final ex = s['extra'];
+        if (_managedAgentIs(
+          ex,
+          (a) => a == 'kimi-cli' || a.contains('kimi'),
+        )) {
+          return true;
+        }
         final k = (s['kind'] ?? '').toString();
         final id = (s['sessionId'] ?? '').toString();
         return k.contains('kimi') || id.startsWith('kimi-');

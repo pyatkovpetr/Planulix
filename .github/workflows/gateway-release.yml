@@ -1,0 +1,131 @@
+name: Gateway Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: gateway-release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build gateway (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Build
+        working-directory: server
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p ../dist
+          go build -trimpath -ldflags="-s -w" \
+            -o "../dist/planulix-gateway-${GOOS}-${GOARCH}" .
+
+      - name: Package
+        run: |
+          mkdir -p "dist/pkg-${{ matrix.goos }}-${{ matrix.goarch }}"
+          cp "dist/planulix-gateway-${{ matrix.goos }}-${{ matrix.goarch }}" \
+            "dist/pkg-${{ matrix.goos }}-${{ matrix.goarch }}/planulix-gateway"
+          chmod +x "dist/pkg-${{ matrix.goos }}-${{ matrix.goarch }}/planulix-gateway"
+          tar -C "dist/pkg-${{ matrix.goos }}-${{ matrix.goarch }}" \
+            -czf "dist/planulix-gateway-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" \
+            planulix-gateway
+          shasum -a 256 "dist/planulix-gateway-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" \
+            > "dist/planulix-gateway-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/planulix-gateway-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+            dist/planulix-gateway-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz.sha256
+          if-no-files-found: error
+
+  publish-latest:
+    name: Publish gateway-latest prerelease
+    needs: build
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Update rolling release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: gateway-latest
+          commit: ${{ github.sha }}
+          name: Gateway latest
+          body: |
+            Rolling Planulix Gateway build for one-click VPS installation.
+
+            Commit: ${{ github.sha }}
+          prerelease: true
+          allowUpdates: true
+          replacesArtifacts: true
+          removeArtifacts: true
+          artifacts: |
+            dist/planulix-gateway-linux-amd64.tar.gz
+            dist/planulix-gateway-linux-amd64.tar.gz.sha256
+            dist/planulix-gateway-linux-arm64.tar.gz
+            dist/planulix-gateway-linux-arm64.tar.gz.sha256
+
+  publish-tag:
+    name: Publish versioned release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.ref_name }}
+          name: Planulix ${{ github.ref_name }}
+          body: |
+            Planulix Gateway binaries for Linux VPS installation.
+          allowUpdates: true
+          replacesArtifacts: true
+          artifacts: |
+            dist/planulix-gateway-linux-amd64.tar.gz
+            dist/planulix-gateway-linux-amd64.tar.gz.sha256
+            dist/planulix-gateway-linux-arm64.tar.gz
+            dist/planulix-gateway-linux-arm64.tar.gz.sha256
