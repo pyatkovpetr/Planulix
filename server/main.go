@@ -183,6 +183,7 @@ func main() {
 	api.POST("/setup/agents/:id/auth/start", srv.StartAgentAuth)
 	api.GET("/setup/agents/:id/auth/state", srv.AgentAuthState)
 	api.POST("/setup/agents/:id/auth/stop", srv.StopAgentAuth)
+	api.POST("/setup/agents/:id/smoke", srv.SmokeTestAgent)
 	api.POST("/setup/claude-code/install", srv.InstallClaudeCode)
 	api.POST("/setup/claude-code/auth/start", srv.StartClaudeCodeAuth)
 	api.GET("/setup/claude-code/auth/state", srv.ClaudeAuthState)

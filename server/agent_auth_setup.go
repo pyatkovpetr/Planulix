@@ -79,11 +79,11 @@ func agentAuthConfigured(agentID, bin string) bool {
 	case "codex-cli":
 		return envAny("OPENAI_API_KEY")
 	case "opencode":
-		return envAny("ANTHROPIC_API_KEY") || envAny("OPENAI_API_KEY")
+		return bin != ""
 	case "cursor":
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-		defer cancel()
-		return bin != "" && exec.CommandContext(ctx, bin, "status").Run() == nil
+		return bin != ""
+	case "kiro-cli":
+		return bin != ""
 	default:
 		return false
 	}
@@ -281,4 +281,24 @@ func (s *SessionServer) StopAgentAuth(c *gin.Context) {
 	globalAgentAuth.running = false
 	globalAgentAuth.mu.Unlock()
 	c.JSON(200, gin.H{"ok": true})
+}
+
+func (s *SessionServer) SmokeTestAgent(c *gin.Context) {
+	agentID := normalizeSetupAgentID(c.Param("id"))
+	if resolveAgentCommand(agentID) == "" {
+		c.JSON(400, gin.H{"ok": false, "agent": agentID, "error": "agent CLI is not installed"})
+		return
+	}
+	result := runAndStoreAgentSmokeTest(agentID, 90*time.Second)
+	payload := gin.H{
+		"ok":     result.OK,
+		"agent":  agentID,
+		"ready":  result.OK,
+		"smoke":  result,
+		"result": result,
+	}
+	if !result.OK {
+		payload["error"] = result.Log
+	}
+	c.JSON(200, payload)
 }

@@ -1148,6 +1148,14 @@ curl -fsSL $_kPlanulixInstallScript \\
               state.capabilitiesSnapshot,
               setupId,
             );
+            final ready = agentReadyFromCapabilities(
+              state.capabilitiesSnapshot,
+              setupId,
+            );
+            final configured = cap?['configured'] == true;
+            final smoke = cap?['smoke'];
+            final smokeOk = smoke is Map && smoke['ok'] == true;
+            final smokeLog = smoke is Map ? '${smoke['log'] ?? ''}'.trim() : '';
             final version = '${cap?['version'] ?? ''}'.trim();
             final installing = _installingAgents.contains(setupId);
             final authorizing = _authorizingAgents.contains(setupId);
@@ -1159,8 +1167,10 @@ curl -fsSL $_kPlanulixInstallScript \\
                   color: const Color(0xFF0f172a),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
-                    color: installed
+                    color: ready
                         ? const Color(0xFF22c55e).withAlpha(100)
+                        : installed
+                        ? const Color(0xFFf59e0b).withAlpha(120)
                         : const Color(0xFF334155),
                   ),
                 ),
@@ -1181,17 +1191,51 @@ curl -fsSL $_kPlanulixInstallScript \\
                           ),
                         ),
                         Icon(
-                          installed
+                          ready
                               ? Icons.check_circle
+                              : installed
+                              ? Icons.warning_amber_rounded
                               : Icons.radio_button_unchecked,
                           size: 18,
-                          color: installed
+                          color: ready
                               ? const Color(0xFF22c55e)
+                              : installed
+                              ? const Color(0xFFf59e0b)
                               : const Color(0xFF64748b),
                         ),
                       ],
                     ),
                     const SizedBox(height: 6),
+                    Text(
+                      ready
+                          ? 'Готов: тестовое сообщение прошло'
+                          : installed
+                          ? 'CLI найден, но агент ещё не готов: ${configured ? "нужен smoke-test" : "нужна авторизация/API key"}'
+                          : 'CLI не установлен на сервере',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: ready
+                            ? const Color(0xFF22c55e)
+                            : installed
+                            ? const Color(0xFFf59e0b)
+                            : const Color(0xFF64748b),
+                        height: 1.3,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    if (!smokeOk && smokeLog.isNotEmpty) ...[
+                      Text(
+                        'Последний тест: $smokeLog',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          color: Color(0xFF94a3b8),
+                          height: 1.3,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                    ],
                     if (version.isNotEmpty) ...[
                       Text(
                         'Версия на сервере: $version',
@@ -1298,6 +1342,19 @@ curl -fsSL $_kPlanulixInstallScript \\
                           ),
                         ),
                       ],
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: installing || authorizing
+                            ? null
+                            : () => _smokeTestAgentCliFromServer(
+                                context,
+                                state,
+                                setupId,
+                                e.title,
+                              ),
+                        icon: const Icon(Icons.task_alt_outlined, size: 20),
+                        label: const Text('Проверить тестовым сообщением'),
+                      ),
                     ],
                   ],
                 ),
@@ -1545,7 +1602,68 @@ curl -fsSL $_kPlanulixInstallScript \\
     } catch (_) {}
     if (!context.mounted) return;
     setState(() => _authorizingAgents.remove(agentId));
+    if (authDone) {
+      await _smokeTestAgentCliFromServer(context, state, agentId, label);
+      return;
+    }
     unawaited(state.loadCapabilitiesIfNeeded());
+  }
+
+  Future<void> _smokeTestAgentCliFromServer(
+    BuildContext context,
+    AppState state,
+    String agentId,
+    String label,
+  ) async {
+    if (_installingAgents.contains(agentId)) return;
+    setState(() => _installingAgents.add(agentId));
+    Map<String, dynamic>? res;
+    Object? thrown;
+    try {
+      res = await state.api.setupAgentSmokeTest(agentId);
+    } catch (e, st) {
+      thrown = e;
+      debugPrint('setupAgentSmokeTest($agentId) $e\n$st');
+    }
+    if (!context.mounted) return;
+    setState(() => _installingAgents.remove(agentId));
+    await state.loadCapabilitiesIfNeeded();
+    if (!context.mounted) return;
+
+    final ok = res?['ok'] == true;
+    final smoke = res?['smoke'];
+    final log = smoke is Map
+        ? '${smoke['log'] ?? ''}'.trim()
+        : '${res?['error'] ?? thrown ?? ''}'.trim();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1e293b),
+        title: Text(
+          ok ? '$label готов к работе' : '$label не прошёл тест',
+          style: const TextStyle(color: Color(0xFFf1f5f9), fontSize: 18),
+        ),
+        content: SelectableText(
+          log.isEmpty
+              ? (ok
+                    ? 'Тестовое сообщение прошло успешно.'
+                    : 'Тест не вернул подробный лог.')
+              : log,
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 11,
+            color: Color(0xFFcbd5e1),
+            height: 1.35,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _installAgentCliFromServer(
@@ -1579,6 +1697,9 @@ curl -fsSL $_kPlanulixInstallScript \\
     }
 
     final ok = res?['ok'] == true;
+    final installed = res?['installed'] == true;
+    final smoke = res?['smoke'];
+    final smokeLog = smoke is Map ? '${smoke['log'] ?? ''}'.trim() : '';
     final gatewayNeedsUpdate = res?['gatewayNeedsUpdate'] == true;
     final log = '${res?['log'] ?? ''}'.trim();
     final err = '${res?['error'] ?? ''}'.trim();
@@ -1592,6 +1713,8 @@ curl -fsSL $_kPlanulixInstallScript \\
         title: Text(
           ok
               ? (force ? '$label обновлён' : '$label установлен')
+              : installed
+              ? '$label установлен, но не готов'
               : 'Установка не удалась полностью',
           style: const TextStyle(color: Color(0xFFf1f5f9), fontSize: 18),
         ),
@@ -1641,9 +1764,9 @@ curl -fsSL $_kPlanulixInstallScript \\
                     ),
                   ),
                 ),
-              if (log.isNotEmpty)
+              if (log.isNotEmpty || smokeLog.isNotEmpty)
                 SelectableText(
-                  log,
+                  smokeLog.isEmpty ? log : '$log\n\nSmoke test:\n$smokeLog',
                   style: const TextStyle(
                     fontFamily: 'monospace',
                     fontSize: 11,
@@ -1688,8 +1811,10 @@ curl -fsSL $_kPlanulixInstallScript \\
         content: Text(
           ok
               ? (force
-                    ? 'Готово. Версия $label обновлена/переустановлена, статус перечитан с сервера.'
-                    : 'Готово. При необходимости сохраните API key/login для $label и обновите сессии.')
+                    ? 'Готово. $label обновлён и ответил на тестовое сообщение.'
+                    : 'Готово. $label установлен и ответил на тестовое сообщение.')
+              : installed
+              ? '$label установлен, но пока не готов: авторизуйте CLI и запустите тест.'
               : 'Смотрите лог в диалоге или ставьте CLI вручную по SSH.',
         ),
       ),

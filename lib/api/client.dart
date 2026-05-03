@@ -631,4 +631,12 @@ class ApiClient {
       rethrow;
     }
   }
+
+  Future<Map<String, dynamic>> setupAgentSmokeTest(String agentId) async {
+    final res = await _dio.post(
+      '/setup/agents/${Uri.encodeComponent(agentId)}/smoke',
+      options: Options(receiveTimeout: const Duration(minutes: 2)),
+    );
+    return Map<String, dynamic>.from(res.data as Map? ?? {});
+  }
 }

@@ -202,7 +202,23 @@ func (s *SessionServer) InstallAgentCLI(c *gin.Context) {
 	}
 	force := c.Query("force") == "1" || strings.EqualFold(c.Query("force"), "true")
 	if p := resolveAgentCommand(spec.ID); p != "" && !force {
-		c.JSON(200, gin.H{"ok": true, "alreadyInstalled": true, "command": p, "log": fmt.Sprintf("%s already installed: %s", spec.Label, p), "notes": spec.Notes})
+		smoke := runAndStoreAgentSmokeTest(spec.ID, 90*time.Second)
+		c.JSON(200, gin.H{
+			"ok":               smoke.OK,
+			"alreadyInstalled": true,
+			"command":          p,
+			"log":              fmt.Sprintf("%s already installed: %s", spec.Label, p),
+			"notes":            spec.Notes,
+			"installed":        true,
+			"ready":            smoke.OK,
+			"smoke":            smoke,
+			"error": func() string {
+				if smoke.OK {
+					return ""
+				}
+				return "CLI found but smoke test failed; authorize/configure the agent and run the test again"
+			}(),
+		})
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
@@ -216,7 +232,11 @@ func (s *SessionServer) InstallAgentCLI(c *gin.Context) {
 	out, err := cmd.CombinedOutput()
 	logStr := strings.TrimSpace(stripANSI(string(out)))
 	installedPath := resolveAgentCommand(spec.ID)
-	ok = err == nil && installedPath != ""
+	smoke := AgentSmokeResult{}
+	if err == nil && installedPath != "" {
+		smoke = runAndStoreAgentSmokeTest(spec.ID, 90*time.Second)
+	}
+	ok = err == nil && installedPath != "" && smoke.OK
 	payload := gin.H{
 		"ok":        ok,
 		"agent":     spec.ID,
@@ -226,10 +246,14 @@ func (s *SessionServer) InstallAgentCLI(c *gin.Context) {
 		"log":       logStr,
 		"notes":     spec.Notes,
 		"installed": installedPath != "",
+		"ready":     ok,
+		"smoke":     smoke,
 		"updated":   force,
 	}
 	if err != nil {
 		payload["error"] = err.Error()
+	} else if installedPath != "" && !smoke.OK {
+		payload["error"] = "CLI installed but smoke test failed; authorize/configure the agent and run the test again"
 	}
 	c.JSON(200, payload)
 }

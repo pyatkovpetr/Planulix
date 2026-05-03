@@ -17,6 +17,12 @@ bool agentInstalledFromCapabilities(
   return false;
 }
 
+bool agentReadyFromCapabilities(Map<String, dynamic>? caps, String agentId) {
+  final cap = agentCapabilityFromCapabilities(caps, agentId);
+  if (cap == null) return false;
+  return cap['ready'] == true;
+}
+
 Map<String, dynamic>? agentCapabilityFromCapabilities(
   Map<String, dynamic>? caps,
   String agentId,
@@ -35,7 +41,7 @@ Map<String, dynamic>? agentCapabilityFromCapabilities(
 }
 
 bool claudeCodeInstalledFromCaps(Map<String, dynamic>? caps) =>
-    agentInstalledFromCapabilities(caps, 'claude-code');
+    agentReadyFromCapabilities(caps, 'claude-code');
 
 String setupAgentIdForScope(String scope) {
   switch (scope) {
@@ -62,5 +68,5 @@ bool scopeHasInstallableCli(String scope) =>
 bool scopeCliInstalledFromCaps(Map<String, dynamic>? caps, String scope) {
   final agentId = setupAgentIdForScope(scope);
   if (agentId.isEmpty) return true;
-  return agentInstalledFromCapabilities(caps, agentId);
+  return agentReadyFromCapabilities(caps, agentId);
 }

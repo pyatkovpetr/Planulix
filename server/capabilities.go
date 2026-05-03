@@ -24,6 +24,8 @@ type CapabilityAgent struct {
 	Command    string            `json:"command"`
 	Installed  bool              `json:"installed"`
 	Configured bool              `json:"configured"`
+	Ready      bool              `json:"ready"`
+	Smoke      AgentSmokeResult  `json:"smoke"`
 	Version    string            `json:"version,omitempty"`
 	Models     []CapabilityModel `json:"models"`
 }
@@ -99,6 +101,12 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 	if claudeInstalled {
 		claudeVers = commandVersion(claudeBin)
 	}
+	claudeSmoke := agentSmokeCached("claude-code")
+	kimiSmoke := agentSmokeCached("kimi-cli")
+	codexSmoke := agentSmokeCached("codex-cli")
+	cursorSmoke := agentSmokeCached("cursor")
+	opencodeSmoke := agentSmokeCached("opencode")
+	kiroSmoke := agentSmokeCached("kiro-cli")
 	c.JSON(200, gin.H{
 		"serverVersion": "dev",
 		"agents": []CapabilityAgent{
@@ -108,6 +116,8 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 				Command:    "claude",
 				Installed:  claudeInstalled,
 				Configured: claudeConfigured,
+				Ready:      claudeInstalled && claudeConfigured && claudeSmoke.OK,
+				Smoke:      claudeSmoke,
 				Version:    claudeVers,
 				Models:     claudeCapabilityModels,
 			},
@@ -117,6 +127,8 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 				Command:    "kimi",
 				Installed:  kimiInstalled,
 				Configured: kimiInstalled || envAny("KIMI_API_KEY", "MOONSHOT_API_KEY"),
+				Ready:      kimiInstalled && kimiSmoke.OK,
+				Smoke:      kimiSmoke,
 				Version:    commandVersion(kimiBin),
 				Models:     kimiCapabilityModels,
 			},
@@ -126,6 +138,8 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 				Command:    "codex",
 				Installed:  codexBin != "",
 				Configured: codexBin != "" && envAny("OPENAI_API_KEY"),
+				Ready:      codexBin != "" && envAny("OPENAI_API_KEY") && codexSmoke.OK,
+				Smoke:      codexSmoke,
 				Version:    commandVersion(codexBin),
 				Models: []CapabilityModel{
 					{Label: "GPT-5.2 Codex", ID: "gpt-5.2-codex", Tier: "Default", PriceInPerM: 3.0, PriceOutPerM: 15.0},
@@ -137,6 +151,8 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 				Command:    "agent",
 				Installed:  cursorBin != "",
 				Configured: cursorBin != "",
+				Ready:      cursorBin != "" && cursorSmoke.OK,
+				Smoke:      cursorSmoke,
 				Version:    commandVersion(cursorBin),
 				Models: []CapabilityModel{
 					{Label: "GPT-5.2", ID: "gpt-5.2", Tier: "Cursor", PriceInPerM: 0, PriceOutPerM: 0},
@@ -148,6 +164,8 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 				Command:    "opencode",
 				Installed:  opencodeBin != "",
 				Configured: opencodeBin != "",
+				Ready:      opencodeBin != "" && opencodeSmoke.OK,
+				Smoke:      opencodeSmoke,
 				Version:    commandVersion(opencodeBin),
 				Models: []CapabilityModel{
 					{Label: "Provider default", ID: "opencode-default", Tier: "Provider", PriceInPerM: 0, PriceOutPerM: 0},
@@ -159,6 +177,8 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 				Command:    "kiro-cli",
 				Installed:  kiroBin != "",
 				Configured: kiroBin != "",
+				Ready:      kiroBin != "" && kiroSmoke.OK,
+				Smoke:      kiroSmoke,
 				Version:    commandVersion(kiroBin),
 				Models: []CapabilityModel{
 					{Label: "Kiro default", ID: "kiro-default", Tier: "Kiro", PriceInPerM: 0, PriceOutPerM: 0},
