@@ -171,6 +171,21 @@ func modelFlagValue(model string) string {
 	}
 }
 
+// codexCLIModelFlag returns a ` --model "…"` suffix for `codex` / `codex exec`.
+// ChatGPT-signed-in Codex rejects some UI ids like gpt-5.2-codex; omit the flag unless
+// a platform OPENAI_API_KEY is present so the CLI picks the subscription-appropriate model.
+func codexCLIModelFlag(agentEnv map[string]string, model string) string {
+	platformAPI := envMapAny(agentEnv, "OPENAI_API_KEY") || envAny("OPENAI_API_KEY")
+	if !platformAPI {
+		return ""
+	}
+	m := modelFlagValue(model)
+	if m == "" {
+		return ""
+	}
+	return fmt.Sprintf(" --model %q", m)
+}
+
 // cursorCLIAllowedModel rejects Anthropic/Kimi/other provider ids accidentally sent while a Claude tab/model picker is visible.
 func cursorCLIAllowedModel(model string) string {
 	m := modelFlagValue(model)
@@ -226,10 +241,7 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 			return "", "", fmt.Errorf("codex CLI not found on server (install Codex CLI first)")
 		}
 		env = genericAgentExports(agentEnv)
-		modelFlag := ""
-		if m := modelFlagValue(model); m != "" {
-			modelFlag = fmt.Sprintf(" --model %q", m)
-		}
+		modelFlag := codexCLIModelFlag(agentEnv, model)
 		q := strconv.Quote(bin)
 		// `codex exec` (smoke/tests/headless) does not accept `--ask-for-approval` — that flag is for the interactive CLI / TUI.
 		// Older Planulix builds passed `--ask-for-approval never`, which breaks codex-cli v0.12x+ exec.

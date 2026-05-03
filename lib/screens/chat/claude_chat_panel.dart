@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -1233,39 +1233,49 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
               },
             ),
 
-          // Project context line
-          if (widget.projectPath != null)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              color: const Color(0xFF0f172a),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.folder_outlined,
-                    size: 10,
-                    color: Color(0xFF64748b),
-                  ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      widget.projectPath!,
-                      style: const TextStyle(
-                        fontSize: 9,
-                        color: Color(0xFF64748b),
-                        fontFamily: 'monospace',
-                      ),
-                      overflow: TextOverflow.ellipsis,
+          // Project context line (explorer path or last saved workspace for server cwd).
+          Builder(
+            builder: (ctx) {
+              final banner = _workspaceBannerPath(appState);
+              if (banner == null || banner.isEmpty) {
+                return const SizedBox.shrink();
+              }
+              return Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
+                color: const Color(0xFF0f172a),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.folder_outlined,
+                      size: 10,
+                      color: Color(0xFF64748b),
                     ),
-                  ),
-                ],
-              ),
-            ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        banner,
+                        style: const TextStyle(
+                          fontSize: 9,
+                          color: Color(0xFF64748b),
+                          fontFamily: 'monospace',
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
 
           // Messages
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-                : widget.projectPath == null
+                : !_hasChatWorkspace(appState)
                 ? _buildEmptyState('Open a project to start chatting')
                 : _messages.isEmpty
                 ? _buildEmptyState('Say something to start a new chat session')
@@ -1750,6 +1760,23 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
     }
   }
 
+  /// True when explorer has a folder or [AppState.workspacePath] is set (used for server cwd).
+  bool _hasChatWorkspace(AppState state) {
+    final p = widget.projectPath?.trim();
+    if (p != null && p.isNotEmpty) return true;
+    final w = state.workspacePath?.trim();
+    return w != null && w.isNotEmpty;
+  }
+
+  /// Banner path shown above messages (preferred explorer, else saved workspace).
+  String? _workspaceBannerPath(AppState state) {
+    final p = widget.projectPath?.trim();
+    if (p != null && p.isNotEmpty) return p;
+    final w = state.workspacePath?.trim();
+    if (w != null && w.isNotEmpty) return w;
+    return null;
+  }
+
   Widget _buildEmptyState(String text) {
     return Center(
       child: Padding(
@@ -1916,6 +1943,35 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
                   child: CircularProgressIndicator(strokeWidth: 1),
                 ),
               ],
+              if (text.isNotEmpty && !pending) ...[
+                const SizedBox(width: 4),
+                Tooltip(
+                  message: 'Копировать',
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(4),
+                    onTap: () async {
+                      final messenger = ScaffoldMessenger.of(context);
+                      await Clipboard.setData(ClipboardData(text: text));
+                      if (!mounted) return;
+                      messenger.showSnackBar(
+                        const SnackBar(
+                          content: Text('Скопировано в буфер'),
+                          duration: Duration(seconds: 2),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.all(4),
+                      child: Icon(
+                        Icons.content_copy_rounded,
+                        size: 12,
+                        color: Color(0xFF64748b),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 3),
@@ -1926,7 +1982,9 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
               borderRadius: BorderRadius.circular(6),
               border: Border.all(color: const Color(0xFF1e2a3d)),
             ),
-            child: _buildMessageBodySelectable(text.isEmpty ? '...' : text),
+            child: SelectionArea(
+              child: _buildMessageBodySelectable(text.isEmpty ? '...' : text),
+            ),
           ),
         ],
       ),
