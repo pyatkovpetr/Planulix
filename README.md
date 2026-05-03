@@ -1,64 +1,122 @@
-# Planulix — Powerful Session Manager for Kimi & Claude
+# Planulix
 
-![Planulix Hero](https://github.com/pyatkovpetr/Planulix/raw/main/assets/hero.png)
+**Planulix** — клиент и **self-hosted Gateway (Go)** для управления сессиями **Kimi Code**, **Claude Code** и других CLI-агентов: список сессий, чат, редактор файлов на сервере, учёт токенов и стоимости.
 
-**Mobile client + lightweight server agent that turns Claude and Kimi into a true productivity powerhouse.**
+*Planulix — session manager and remote workspace for Kimi & Claude coding agents (mobile, desktop, web).*
 
-Deploy a single binary to your VPS and get instant session switching, persistent context, and seamless work across all your devices.
+![Полный интерфейс: проводник, редактор и чат](assets/readme/desktop-full-ide.png)
 
-### Why Developers Love Planulix
+---
 
-- ⚡ **Instant session switching** — like browser tabs, but for AI
-- 🖥️ One lightweight binary on your server (minimal resource usage)
-- 📱 Beautiful clients for iOS, Android, and Desktop
-- 🔄 Start on laptop, continue on phone — context never lost
-- 🛡️ Full privacy — your keys and data stay yours
-- Works great with **Kimi Code** and **Claude Code**
+## Что вы получаете
 
-> “Planulix finally solved my biggest pain — losing context between sessions. My workflow is so much faster now.”
+- **Ваш сервер, ваш токен API** — ключи агентов хранятся у вас в приложении и передаются на Gateway в `agentEnv`; трафик идёт на ваш VPS или домашнюю машину.
+- **Единый список сессий** — фильтры по статусу (все / избранное / активные / завершённые), по проекту, поиск, переключение области агента (Kimi / Claude / …).
+- **Подсчёт сессий** — в карточке агента и в сводке: сколько сессий в текущем фильтре, сколько активно, сколько всего на сервере; на панели сессий в IDE — счётчик вида `SESSIONS 1/32`.
+- **Аналитика расходов** — суммарная стоимость, токены (вход / выход), график по дням, разбивка по моделям и проектам.
+- **Режим редактора** — открытие файлов дерева проекта, подсветка синтаксиса, путь к файлу на сервере; рядом чат с выбранной моделью и slash-командами (`/skills`).
+- **Вводный тур** — четыре шага при первом запуске: архитектура, Tailscale, сборка сервера по SSH, что делать дальше в приложении. Повторить тур можно в **Настройках**.
+- **Диагностика сети** — проверка `/healthz`, токена, установленных агентов, интерфейсов сервера (публичный IP, Tailscale), доступности порта Gateway.
 
-### Key Features
+---
 
-- 🚀 One-click server agent deployment
-- 🔀 Smart session switching and management
-- 📂 Full history with powerful search
-- 🌊 Extremely lightweight and fast
-- 🔑 Support for multiple accounts and providers
-- 🔒 Secure encrypted connection
+## Скриншоты
 
-### Quick Start (Under 60 Seconds)
+### Мобильный вид: дашборд сессий (Kimi Code)
+
+Портретный клиент: карточка **Kimi Code** (Moonshot, рабочий каталог), фильтры **Show** / **Project**, поиск, блок **In this view** с полосой активности (heatmap) и счётчиками **в этом виде · запущено здесь · всего на сервере**, нижняя навигация **Sessions / Costs / Settings**.
+
+![Мобильный вид — Kimi Code, фильтры и подсчёт сессий](assets/readme/mobile-sessions-kimi.png)
+
+### Мобильный вид: дашборд сессий (Claude Code)
+
+Тот же экран с выбранным **Claude Code** (Anthropic, `~/.claude`): видна группировка по проекту (например `smart-budget`) и те же счётчики сессий.
+
+![Мобильный вид — Claude Code и проекты](assets/readme/mobile-sessions-claude.png)
+
+### Полный вид: веб-IDE (проводник + редактор + чат)
+
+Три колонки: **Explorer** с деревом проекта, центральная вкладка редактора (например `mvnw`), справа **Chat** с контекстом `cwd`, выбором модели (**Sonnet 4**), индикатором usage и полем ввода с подсказкой slash-команд.
+
+![Полный вид — редактор и чат в одном окне](assets/readme/desktop-full-ide.png)
+
+### Полный вид: боковая панель сессий + редактор + чат
+
+Раскладка «как IDE»: слева список **SESSIONS** с фильтрами по агенту и статусу, в центре редактор, справа чат — удобно переключать сессии, не покидая файл.
+
+![Полный вид — список сессий и редактор](assets/readme/desktop-sessions-editor-chat.png)
+
+### Подсчёт сессий и аналитика (Costs)
+
+Панель **Costs / Analytics**: **Total Cost**, число **Sessions**, **Total Tokens**, полоска вход/выход, график **Daily Costs**, круговые/списковые разбивки **Cost by Model** и **Cost by Project**.
+
+![Аналитика: сессии, токены, стоимость по моделям и проектам](assets/readme/costs-analytics.png)
+
+### Настройки и диагностика подключения
+
+Экран **Настройки**: ключи CLI-агентов, кнопка **«Пройти вводный тур снова»**, блок **Connectivity checks** (API, токен, агенты и модели, сетевые интерфейсы сервера, проверка порта Gateway).
+
+![Настройки и сетевые проверки](assets/readme/settings-network-diagnostics.png)
+
+### Вводный тур (онбординг)
+
+| Шаг 1 — архитектура | Шаг 2 — Tailscale |
+|:---:|:---:|
+| ![Тур: ваш сервер, ваш ключ](assets/readme/tour-step-1.png) | ![Тур: подключение через Tailscale](assets/readme/tour-step-2-tailscale.png) |
+
+| Шаг 3 — SSH и сборка сервера | Шаг 4 — дальше в приложении |
+|:---:|:---:|
+| ![Тур: SSH и AUTH_TOKEN](assets/readme/tour-step-3-ssh.png) | ![Тур: Save & Connect и вкладка Sessions](assets/readme/tour-step-4-done.png) |
+
+**Содержание шагов (кратко):**
+
+1. Открытый код: ставите Gateway на VPS или дома, ключи провайдеров остаются у вас.
+2. Если API доступно по Tailscale (`100.x.x.x`), войдите в Tailscale на устройстве — без проброса портов в интернет.
+3. По SSH соберите бинарь из каталога `server`, задайте `AUTH_TOKEN`; в клиенте укажите URL с суффиксом `/api` и тот же токен.
+4. На экране подключения сохраните **Server URL** и **Auth Token**, при необходимости заполните ключи агентов; на **Sessions** выберите Kimi или Claude Code.
+
+---
+
+## Быстрый старт
+
+### 1. Gateway на Linux (пример через скрипт)
+
+На сервере (после входа по SSH):
 
 ```bash
-# 1. Install the client (App Store / Google Play / direct download)
-
-# 2. Deploy the server agent with one command:
-curl -fsSL https://get.planulix.dev | sh
-
-# 3. Create your first session
-planulix new "Refactor authentication module"
+curl -fsSL https://raw.githubusercontent.com/pyatkovpetr/Planulix/main/scripts/install_gateway_remote.sh \
+  | AUTH_TOKEN='ваш-секрет' bash -
 ```
 
-Full documentation → Installation Guide
+Укажите в клиенте **Server URL** вида `http://<хост>:8990/api` (или Tailscale-адрес) и **Auth Token**, совпадающий с `AUTH_TOKEN`.
 
-### Screenshots
+### 2. Сборка из репозитория
 
-<img src="assets/dashboard.png" alt="Dashboard">
-<img src="assets/switcher.png" alt="Session Switcher">
-<img src="assets/mobile.png" alt="Mobile View">
+```bash
+cd server
+go build -o planulix-gateway .
+# задайте переменные окружения (в т.ч. AUTH_TOKEN) и запустите бинарь согласно вашей среде
+```
 
-### Community & Support
+### 3. Клиент
 
-⭐ Star the repo if Planulix is already making your life easier!
+Соберите Flutter-приложение под нужную платформу или используйте веб-сборку; при первом запуске пройдите вводный тур или откройте **Настройки** и заполните подключение вручную.
 
-☕ Buy Me a Coffee — every donation directly fuels faster updates and new features. Even small support means a lot.
+---
 
-Telegram: t.me/planulix
+## Репозиторий и обратная связь
 
-Bug reports and feature requests are welcome.
+- **Issues и PR** — приветствуются.
+- Телеграм: [t.me/planulix](https://t.me/planulix)
 
-### Roadmap
+---
 
-- [ ] Web client
-- [ ] Team / shared sessions
-- [ ] Advanced analytics & insights
-- [ ] Plugins and extensions
+## Лицензия
+
+MIT — см. [LICENSE](LICENSE).
+
+---
+
+## Дополнительные материалы (архив скринов)
+
+Ранее использовавшиеся иллюстрации остаются в каталоге `assets/` (`hero.png`, `dashboard.png`, `mobile.png`, `switcher.png`). Актуальная галерея для README — **`assets/readme/`**.
