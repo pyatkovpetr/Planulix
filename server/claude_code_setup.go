@@ -117,9 +117,8 @@ func (s *SessionServer) StartClaudeCodeAuth(c *gin.Context) {
 	}
 	globalClaudeAuth.mu.Lock()
 	if globalClaudeAuth.running {
-		globalClaudeAuth.mu.Unlock()
-		c.JSON(409, gin.H{"error": "auth flow already running"})
-		return
+		globalClaudeAuth.cleanupLocked(true)
+		globalClaudeAuth.running = false
 	}
 	globalClaudeAuth.cleanupLocked(false)
 	td, err := os.MkdirTemp("", "planulix-claude-auth-*")
@@ -195,9 +194,13 @@ func (s *SessionServer) StartClaudeCodeAuth(c *gin.Context) {
 
 	go globalClaudeAuth.drainOAuthPipe(stdoutPipe)
 	go globalClaudeAuth.drainOAuthPipe(stderrPipe)
-	go func() {
+	go func(cmd *exec.Cmd) {
 		waitErr := cmd.Wait()
 		globalClaudeAuth.mu.Lock()
+		if globalClaudeAuth.session != cmd {
+			globalClaudeAuth.mu.Unlock()
+			return
+		}
 		fromFile := readURLFileTail(globalClaudeAuth.urlFile)
 		globalClaudeAuth.allURLs = appendUnique(globalClaudeAuth.allURLs, fromFile)
 		globalClaudeAuth.exitErr = waitErr
@@ -214,7 +217,7 @@ func (s *SessionServer) StartClaudeCodeAuth(c *gin.Context) {
 		if tdLocal != "" {
 			_ = os.RemoveAll(tdLocal)
 		}
-	}()
+	}(cmd)
 
 	c.JSON(200, gin.H{"ok": true})
 }

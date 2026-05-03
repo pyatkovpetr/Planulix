@@ -148,10 +148,10 @@ func (s *SessionServer) StartAgentAuth(c *gin.Context) {
 	}
 
 	globalAgentAuth.mu.Lock()
+	// Replace any stale or stuck flow (avoid 409; client retry/stop raced with wait goroutine).
 	if globalAgentAuth.running {
-		globalAgentAuth.mu.Unlock()
-		c.JSON(409, gin.H{"error": "auth flow already running", "agent": globalAgentAuth.agentID})
-		return
+		globalAgentAuth.cleanupLocked(true)
+		globalAgentAuth.running = false
 	}
 	globalAgentAuth.cleanupLocked(false)
 	td, err := os.MkdirTemp("", "planulix-agent-auth-*")
@@ -233,9 +233,13 @@ func (s *SessionServer) StartAgentAuth(c *gin.Context) {
 
 	go globalAgentAuth.drain(stdoutPipe)
 	go globalAgentAuth.drain(stderrPipe)
-	go func() {
+	go func(cmd *exec.Cmd) {
 		waitErr := cmd.Wait()
 		globalAgentAuth.mu.Lock()
+		if globalAgentAuth.session != cmd {
+			globalAgentAuth.mu.Unlock()
+			return
+		}
 		fromFile := readURLFileTail(globalAgentAuth.urlFile)
 		globalAgentAuth.allURLs = appendUnique(globalAgentAuth.allURLs, fromFile)
 		globalAgentAuth.exitErr = waitErr
@@ -252,7 +256,7 @@ func (s *SessionServer) StartAgentAuth(c *gin.Context) {
 		if tdLocal != "" {
 			_ = os.RemoveAll(tdLocal)
 		}
-	}()
+	}(cmd)
 
 	c.JSON(200, gin.H{"ok": true, "agent": agentID})
 }
