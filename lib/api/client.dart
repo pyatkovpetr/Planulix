@@ -644,15 +644,41 @@ class ApiClient {
     String? code,
     String? callbackUrl,
   }) async {
-    final res = await _dio.post(
-      '/setup/agents/${Uri.encodeComponent(agentId)}/auth/submit',
-      data: {
-        if (code != null && code.trim().isNotEmpty) 'code': code.trim(),
-        if (callbackUrl != null && callbackUrl.trim().isNotEmpty)
-          'callbackUrl': callbackUrl.trim(),
-      },
-    );
-    return Map<String, dynamic>.from(res.data as Map? ?? {});
+    final data = <String, dynamic>{
+      if (code != null && code.trim().isNotEmpty) 'code': code.trim(),
+      if (callbackUrl != null && callbackUrl.trim().isNotEmpty)
+        'callbackUrl': callbackUrl.trim(),
+    };
+    final rel = 'setup/agents/${Uri.encodeComponent(agentId)}/auth/submit';
+
+    Future<Response<dynamic>> postSubmit(Uri uri) =>
+        _dio.postUri(uri, data: data);
+
+    /// If nginx forwards `/api/*` → `/*`, `/api/setup/...` becomes 404; gateway also listens on `/setup/...`.
+    Uri? alternateSubmitUriRoot() {
+      var b = baseUrl.trim();
+      if (b.isEmpty) return null;
+      while (b.endsWith('/')) {
+        b = b.substring(0, b.length - 1);
+      }
+      if (!b.endsWith('/api')) return null;
+      final root =
+          b.substring(0, b.length - 4).replaceFirst(RegExp(r'/+$'), '');
+      return Uri.parse(
+        '$root/setup/agents/${Uri.encodeComponent(agentId)}/auth/submit',
+      );
+    }
+
+    try {
+      final res = await postSubmit(_apiUri(rel));
+      return Map<String, dynamic>.from(res.data as Map? ?? {});
+    } on DioException catch (e) {
+      if (e.response?.statusCode != 404) rethrow;
+      final alt = alternateSubmitUriRoot();
+      if (alt == null) rethrow;
+      final res = await postSubmit(alt);
+      return Map<String, dynamic>.from(res.data as Map? ?? {});
+    }
   }
 
   Future<Map<String, dynamic>> setupAgentSmokeTest(String agentId) async {

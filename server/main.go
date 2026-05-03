@@ -121,7 +121,7 @@ func main() {
 
 	// Auth middleware — accepts Bearer header OR ?token= query param (for WebSocket).
 	// Constant-time comparison to avoid timing leaks.
-	api := r.Group("/api", func(c *gin.Context) {
+	authMiddleware := func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
 		if subtle.ConstantTimeCompare([]byte(auth), []byte(expectedAuthHeader)) == 1 {
 			c.Next()
@@ -132,7 +132,9 @@ func main() {
 			return
 		}
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-	})
+	}
+
+	api := r.Group("/api", authMiddleware)
 
 	api.GET("/sessions", srv.ListSessions)
 	api.GET("/sessions/:id", srv.GetSession)
@@ -189,6 +191,19 @@ func main() {
 	api.POST("/setup/claude-code/auth/start", srv.StartClaudeCodeAuth)
 	api.GET("/setup/claude-code/auth/state", srv.ClaudeAuthState)
 	api.POST("/setup/claude-code/auth/stop", srv.StopClaudeCodeAuth)
+
+	// Mirrors for reverse proxies that forward /api/* to the app as /* (OAuth CLI submit 404 otherwise).
+	setupRoot := r.Group("", authMiddleware)
+	setupRoot.POST("/setup/agents/:id/install", srv.InstallAgentCLI)
+	setupRoot.POST("/setup/agents/:id/auth/start", srv.StartAgentAuth)
+	setupRoot.GET("/setup/agents/:id/auth/state", srv.AgentAuthState)
+	setupRoot.POST("/setup/agents/:id/auth/submit", srv.SubmitAgentAuthCode)
+	setupRoot.POST("/setup/agents/:id/auth/stop", srv.StopAgentAuth)
+	setupRoot.POST("/setup/agents/:id/smoke", srv.SmokeTestAgent)
+	setupRoot.POST("/setup/claude-code/install", srv.InstallClaudeCode)
+	setupRoot.POST("/setup/claude-code/auth/start", srv.StartClaudeCodeAuth)
+	setupRoot.GET("/setup/claude-code/auth/state", srv.ClaudeAuthState)
+	setupRoot.POST("/setup/claude-code/auth/stop", srv.StopClaudeCodeAuth)
 
 	// Public health check (no auth) for ping
 	r.GET("/healthz", func(c *gin.Context) {
