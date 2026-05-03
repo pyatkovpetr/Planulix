@@ -1253,6 +1253,18 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 		if rec != nil && rec.ClaudeSessionID != "" {
 			claudeSessionID = rec.ClaudeSessionID
 		}
+		if strings.HasPrefix(id, "cd-") && (rec == nil || strings.TrimSpace(rec.ClaudeSessionID) == "") {
+			answer, err := runAgentTaskSendResult("claude-code", cwd, req.Text, req.AgentEnv, req.Model, "stored-unlinked-fallback")
+			if err != nil {
+				c.JSON(409, gin.H{"error": "claude session not linked yet; wait a few seconds and retry", "fallbackError": err.Error()})
+				return
+			}
+			if rec != nil {
+				s.appendStoredLocalTranscript(rec, req.Text, answer, req.Model)
+			}
+			c.JSON(200, gin.H{"ok": true, "assistant": answer, "fallbackTask": true})
+			return
+		}
 
 		if cwd == "" {
 			cwd = s.findSessionCwd(claudeSessionID)
@@ -1383,7 +1395,18 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 			}
 		}
 		if strings.TrimSpace(ts.ClaudeSession) == "" {
-			c.JSON(409, gin.H{"error": "claude session not linked yet; wait a few seconds and retry"})
+			cwd := normalizeSessionCwd(ts.Cwd)
+			model := strings.TrimSpace(req.Model)
+			if model == "" {
+				model = ts.Model
+			}
+			answer, err := runAgentTaskSendResult("claude-code", cwd, req.Text, req.AgentEnv, model, "managed-unlinked-fallback")
+			if err != nil {
+				c.JSON(409, gin.H{"error": "claude session not linked yet; wait a few seconds and retry", "fallbackError": err.Error()})
+				return
+			}
+			s.appendManagedLocalTranscript(ts, req.Text, answer, model)
+			c.JSON(200, gin.H{"ok": true, "assistant": answer, "fallbackTask": true})
 			return
 		}
 		cwd := ts.Cwd
