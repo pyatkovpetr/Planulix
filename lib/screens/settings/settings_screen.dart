@@ -26,6 +26,8 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _urlController;
   late TextEditingController _tokenController;
+  late TextEditingController _gatewaySshUserController;
+  late TextEditingController _gatewaySshPortController;
   late TextEditingController _kimiKeyController;
   late TextEditingController _anthropicKeyController;
   late TextEditingController _openaiKeyController;
@@ -48,6 +50,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final api = state.api;
     _urlController = TextEditingController(text: api.baseUrl);
     _tokenController = TextEditingController(text: api.authToken ?? '');
+    final ap = state.activeProfile;
+    _gatewaySshUserController = TextEditingController(
+      text: (ap?.sshUser ?? '').trim(),
+    );
+    _gatewaySshPortController = TextEditingController(
+      text: '${ap?.resolvedSshPort ?? 22}',
+    );
     _kimiKeyController = TextEditingController(
       text: state.agentApiKeys['kimi'] ?? '',
     );
@@ -63,6 +72,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _urlController.dispose();
     _tokenController.dispose();
+    _gatewaySshUserController.dispose();
+    _gatewaySshPortController.dispose();
     _kimiKeyController.dispose();
     _anthropicKeyController.dispose();
     _openaiKeyController.dispose();
@@ -72,6 +83,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _syncControllersFromApi(AppState state) {
     _urlController.text = state.api.baseUrl;
     _tokenController.text = state.api.authToken ?? '';
+    final p = state.activeProfile;
+    if (p != null) {
+      _gatewaySshUserController.text = (p.sshUser ?? '').trim();
+      _gatewaySshPortController.text = '${p.resolvedSshPort}';
+    }
   }
 
   Future<void> _openUrl(String url) async {
@@ -114,10 +130,8 @@ curl -fsSL $_kPlanulixInstallScript \\
     final ok = await VpsGatewayWizardDialog.open(context);
     if (!mounted || !ok) return;
     final state = context.read<AppState>();
-    final api = state.api;
     setState(() {
-      _urlController.text = api.baseUrl;
-      _tokenController.text = api.authToken ?? '';
+      _syncControllersFromApi(state);
     });
   }
 
@@ -125,6 +139,11 @@ curl -fsSL $_kPlanulixInstallScript \\
     final nameC = TextEditingController(text: 'VPS');
     final urlC = TextEditingController(text: _urlController.text);
     final tokC = TextEditingController(text: _tokenController.text);
+    final sshUserC =
+        TextEditingController(text: _gatewaySshUserController.text.trim());
+    final sshPortC =
+        TextEditingController(text: _gatewaySshPortController.text.trim());
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -159,6 +178,21 @@ curl -fsSL $_kPlanulixInstallScript \\
                 style: const TextStyle(color: Color(0xFFe2e8f0)),
                 decoration: _dialogFieldDecoration('Auth token'),
               ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: sshUserC,
+                style: const TextStyle(fontSize: 13, color: Color(0xFFe2e8f0)),
+                decoration: _dialogFieldDecoration(
+                  'SSH user (oauth browser); пусто = root',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: sshPortC,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+                decoration: _dialogFieldDecoration('SSH port (22)'),
+              ),
             ],
           ),
         ),
@@ -174,7 +208,23 @@ curl -fsSL $_kPlanulixInstallScript \\
         ],
       ),
     );
-    if (ok != true || !mounted) return;
+
+    void releaseDialogControllers() {
+      nameC.dispose();
+      urlC.dispose();
+      tokC.dispose();
+      sshUserC.dispose();
+      sshPortC.dispose();
+    }
+
+    if (ok != true || !mounted) {
+      releaseDialogControllers();
+      return;
+    }
+
+    final su = sshUserC.text.trim();
+    final sp = int.tryParse(sshPortC.text.trim());
+    releaseDialogControllers();
 
     final state = context.read<AppState>();
     final p = ServerProfile(
@@ -182,6 +232,8 @@ curl -fsSL $_kPlanulixInstallScript \\
       name: nameC.text.trim().isEmpty ? 'Server' : nameC.text.trim(),
       baseUrl: urlC.text.trim(),
       token: tokC.text.trim(),
+      sshUser: su.isEmpty ? null : su,
+      sshPort: (sp != null && sp > 0 && sp < 65536) ? sp : null,
     );
     await state.persistServerProfiles([
       ...state.serverProfiles,
@@ -627,6 +679,29 @@ curl -fsSL $_kPlanulixInstallScript \\
             style: const TextStyle(fontSize: 14),
             obscureText: true,
           ),
+          const SizedBox(height: 20),
+          const Text(
+            'SSH до gateway',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Для «Remote Browser» и OAuth через IP VPS (SOCKS на тот же хост, что в Server URL): пользователь SSH и порт. Пустой пользователь = root.',
+            style: TextStyle(fontSize: 11, color: Color(0xFF64748b), height: 1.35),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _gatewaySshUserController,
+            decoration: _inputDecoration('SSH user (обычно root)'),
+            style: const TextStyle(fontSize: 14),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _gatewaySshPortController,
+            keyboardType: TextInputType.number,
+            decoration: _inputDecoration('SSH port'),
+            style: const TextStyle(fontSize: 14, fontFamily: 'monospace'),
+          ),
           const SizedBox(height: 24),
           if (_testResult != null) _testBanner(),
           Row(
@@ -901,6 +976,11 @@ curl -fsSL $_kPlanulixInstallScript \\
       final messenger = ScaffoldMessenger.of(context);
       final state = context.read<AppState>();
       await state.configure(_urlController.text, _tokenController.text);
+      final sshPort = int.tryParse(_gatewaySshPortController.text.trim()) ?? 22;
+      await state.saveGatewaySshForActiveProfile(
+        sshUserRaw: _gatewaySshUserController.text,
+        sshPort: sshPort,
+      );
       if (!context.mounted) return;
       setState(() => _testResult = 'ok');
       messenger.showSnackBar(const SnackBar(content: Text('Saved')));

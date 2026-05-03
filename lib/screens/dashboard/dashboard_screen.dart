@@ -1475,7 +1475,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton.icon(
-                      onPressed: () {
+                      onPressed: () async {
                         if (selectedMode == 'task' &&
                             promptController.text.trim().isEmpty) {
                           ScaffoldMessenger.of(ctx).showSnackBar(
@@ -1488,8 +1488,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           );
                           return;
                         }
-                        Navigator.pop(ctx);
-                        state.createSession(
+                        final nav = Navigator.of(ctx);
+                        final messenger = ScaffoldMessenger.of(context);
+                        nav.pop();
+                        final ok = await state.createSession(
                           cwd: cwdController.text.trim().isEmpty
                               ? null
                               : cwdController.text.trim(),
@@ -1505,6 +1507,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               : selectedClaudeModel,
                           agent: isKimi ? 'kimi-cli' : null,
                         );
+                        if (!context.mounted) return;
+                        if (ok) {
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                isKimi
+                                    ? 'Сессия Kimi создана на сервере'
+                                    : 'Сессия Claude создана на сервере',
+                              ),
+                              backgroundColor: const Color(0xFF15803d),
+                            ),
+                          );
+                        } else {
+                          final msg = state.error ?? 'Не удалось создать сессию';
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                msg.length > 280 ? '${msg.substring(0, 280)}…' : msg,
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                              backgroundColor: const Color(0xFFb91c1c),
+                            ),
+                          );
+                        }
                       },
                       icon: Icon(
                         selectedMode == 'task'

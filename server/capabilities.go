@@ -43,14 +43,30 @@ var kimiCapabilityModels = []CapabilityModel{
 	{Label: "Moonshot V1 128K", ID: "moonshot-v1-128k", Tier: "Long ctx", PriceInPerM: 0.30, PriceOutPerM: 0.30},
 }
 
-func commandVersion(name string) string {
+func commandVersion(bin string) string {
+	if strings.TrimSpace(bin) == "" {
+		return ""
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, "--version").CombinedOutput()
+	out, err := exec.CommandContext(ctx, bin, "--version").CombinedOutput()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(strings.Split(string(out), "\n")[0])
+}
+
+func claudeAuthStatusOK(binary string) bool {
+	binary = strings.TrimSpace(binary)
+	if binary == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(ctx, binary, "auth", "status").Run(); err == nil {
+		return true
+	}
+	return exec.CommandContext(ctx, binary, "auth", "status", "--json").Run() == nil
 }
 
 func commandInstalled(name string) bool {
@@ -68,8 +84,21 @@ func envAny(keys ...string) bool {
 }
 
 func (s *SessionServer) GetCapabilities(c *gin.Context) {
-	claudeInstalled := commandInstalled("claude")
+	claudeBin := resolveClaudeBinary()
+	claudeInstalled := claudeBin != ""
 	kimiInstalled := commandInstalled("kimi")
+	claudeConfigured := false
+	if claudeInstalled {
+		claudeConfigured = envAny("ANTHROPIC_API_KEY") || claudeAuthStatusOK(claudeBin)
+	}
+	claudeVers := ""
+	if claudeInstalled {
+		claudeVers = commandVersion(claudeBin)
+	}
+	kimiBin, _ := exec.LookPath("kimi")
+	if kimiBin == "" {
+		kimiBin = "kimi"
+	}
 	c.JSON(200, gin.H{
 		"serverVersion": "dev",
 		"agents": []CapabilityAgent{
@@ -78,8 +107,8 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 				Label:      "Claude",
 				Command:    "claude",
 				Installed:  claudeInstalled,
-				Configured: claudeInstalled || envAny("ANTHROPIC_API_KEY"),
-				Version:    commandVersion("claude"),
+				Configured: claudeConfigured,
+				Version:    claudeVers,
 				Models:     claudeCapabilityModels,
 			},
 			{
@@ -88,7 +117,7 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 				Command:    "kimi",
 				Installed:  kimiInstalled,
 				Configured: kimiInstalled || envAny("KIMI_API_KEY", "MOONSHOT_API_KEY"),
-				Version:    commandVersion("kimi"),
+				Version:    commandVersion(kimiBin),
 				Models:     kimiCapabilityModels,
 			},
 		},

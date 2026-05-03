@@ -15,6 +15,7 @@ import '../explorer/project_picker.dart';
 import '../explorer/command_palette.dart';
 import '../explorer/terminal_panel.dart';
 import '../chat/claude_chat_panel.dart';
+import '../../utils/chat_models.dart';
 import '../../widgets/resizable_divider.dart';
 import '../onboarding/agent_welcome_screen.dart';
 import '../onboarding/connection_welcome_screen.dart';
@@ -1055,15 +1056,38 @@ class _DesktopShellState extends State<DesktopShell> {
                     TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
                     const SizedBox(width: 8),
                     FilledButton(
-                      onPressed: () {
+                      onPressed: () async {
                         if (selectedMode == 'task' && promptController.text.trim().isEmpty) return;
                         Navigator.pop(ctx);
-                        state.createSession(
+                        final messenger = ScaffoldMessenger.of(context);
+                        final kimi = state.agentScope == 'Kimi';
+                        final ok = await state.createSession(
                           cwd: cwdController.text,
                           prompt: promptController.text.isNotEmpty ? promptController.text : null,
                           name: nameController.text.isNotEmpty ? nameController.text : null,
                           mode: selectedMode,
+                          model: kimi ? kKimiChatModels.first.id : kClaudeChatModels.first.id,
+                          agent: kimi ? 'kimi-cli' : null,
                         );
+                        if (!context.mounted) return;
+                        if (ok) {
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                kimi ? 'Kimi session started on server' : 'Claude session started on server',
+                              ),
+                              backgroundColor: const Color(0xFF15803d),
+                            ),
+                          );
+                        } else {
+                          final msg = state.error ?? 'Failed to create session';
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(msg.length > 280 ? '${msg.substring(0, 280)}…' : msg),
+                              backgroundColor: const Color(0xFFb91c1c),
+                            ),
+                          );
+                        }
                       },
                       style: FilledButton.styleFrom(
                         backgroundColor: selectedMode == 'task' ? const Color(0xFFf59e0b) : const Color(0xFF8b5cf6),

@@ -528,4 +528,27 @@ class ApiClient {
         .replaceFirst('https://', 'wss://');
     return '$base/terminal?cwd=${Uri.encodeQueryComponent(cwd)}';
   }
+
+  /// Установка Claude Code на gateway (может выполняться долго).
+  Future<Map<String, dynamic>> setupClaudeCodeInstall() async {
+    final res = await _dio.post(
+      '/setup/claude-code/install',
+      options: Options(receiveTimeout: const Duration(minutes: 10)),
+    );
+    return Map<String, dynamic>.from(res.data as Map? ?? {});
+  }
+
+  Future<Map<String, dynamic>> setupClaudeCodeAuthStart() async {
+    final res = await _dio.post('/setup/claude-code/auth/start');
+    return Map<String, dynamic>.from(res.data as Map? ?? {});
+  }
+
+  Future<Map<String, dynamic>> setupClaudeCodeAuthState() async {
+    final res = await _dio.get('/setup/claude-code/auth/state');
+    return Map<String, dynamic>.from(res.data as Map? ?? {});
+  }
+
+  Future<void> setupClaudeCodeAuthStop() async {
+    await _dio.post('/setup/claude-code/auth/stop');
+  }
 }

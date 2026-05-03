@@ -461,7 +461,8 @@ func (s *SessionServer) CreateSession(c *gin.Context) {
 		if isKimiAgent(req.Agent, req.Model) {
 			prefix = "kimi"
 		}
-		req.Name = fmt.Sprintf("%s-%d", prefix, time.Now().Unix())
+		// Unix-second names collide under double-create or rapid taps; tmux rejects duplicate targets.
+		req.Name = fmt.Sprintf("%s-%d", prefix, time.Now().UnixMilli())
 	}
 
 	sessionID := fmt.Sprintf("cd-%d", time.Now().UnixMilli())

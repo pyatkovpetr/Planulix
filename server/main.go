@@ -179,6 +179,11 @@ func main() {
 	api.POST("/github/oauth/start", srv.StartGitHubOAuth)
 	api.GET("/github/oauth/result", srv.GitHubOAuthResult)
 
+	api.POST("/setup/claude-code/install", srv.InstallClaudeCode)
+	api.POST("/setup/claude-code/auth/start", srv.StartClaudeCodeAuth)
+	api.GET("/setup/claude-code/auth/state", srv.ClaudeAuthState)
+	api.POST("/setup/claude-code/auth/stop", srv.StopClaudeCodeAuth)
+
 	// Public health check (no auth) for ping
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true, "service": "planulix"})

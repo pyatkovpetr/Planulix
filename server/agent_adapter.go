@@ -3,15 +3,16 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 const (
-	claudeBinDefault = "/home/claude/.nvm/versions/node/v24.14.1/bin/claude"
-	claudeEnv        = "export HOME=/home/claude PATH=/home/claude/.nvm/versions/node/v24.14.1/bin:$PATH TERM=xterm-256color"
-	kimiBinDefault   = "/usr/local/bin/kimi"
-	kimiEnv          = "export HOME=/root PATH=/usr/local/bin:/opt/kimi-cli/bin:$PATH TERM=xterm-256color"
+	claudeBinLegacyFallback = "/home/claude/.nvm/versions/node/v24.14.1/bin/claude"
+	kimiBinDefault          = "/usr/local/bin/kimi"
+	kimiEnv                 = "export HOME=/root PATH=/usr/local/bin:/opt/kimi-cli/bin:$PATH TERM=xterm-256color"
 )
 
 // kimiAuthEnvExports adds API keys from the planulix process environment (e.g. systemd EnvironmentFile=/root/planulix.env)
@@ -48,6 +49,79 @@ func kimiEnvWithAuth() string {
 	return kimiEnv
 }
 
+func claudeSubprocessHome() string {
+	if h := strings.TrimSpace(os.Getenv("PLANULIX_SUBPROCESS_HOME")); h != "" {
+		return h
+	}
+	h, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(h) == "" {
+		return "/root"
+	}
+	return h
+}
+
+func augmentPathFront(home string, basePath string, front ...string) string {
+	basePath = strings.TrimSpace(basePath)
+	if basePath == "" {
+		basePath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	}
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(front)+32)
+	push := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return
+		}
+		if _, ok := seen[p]; ok {
+			return
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	for _, p := range front {
+		push(p)
+	}
+	for _, p := range strings.Split(basePath, string(os.PathListSeparator)) {
+		push(p)
+	}
+	return strings.Join(out, string(os.PathListSeparator))
+}
+
+// resolveClaudeBinary finds the Claude Code CLI: PLANULIX_CLAUDE_BIN, PATH, legacy fallback.
+func resolveClaudeBinary() string {
+	if v := strings.TrimSpace(os.Getenv("PLANULIX_CLAUDE_BIN")); v != "" {
+		return v
+	}
+	if p, err := exec.LookPath("claude"); err == nil && strings.TrimSpace(p) != "" {
+		return strings.TrimSpace(p)
+	}
+	if st, err := os.Stat(claudeBinLegacyFallback); err == nil && !st.IsDir() && st.Mode()&0111 != 0 {
+		return claudeBinLegacyFallback
+	}
+	return ""
+}
+
+// claudeExportsForShell is used for tmux sessions and Claude setup (auth login).
+func claudeExportsForShell(agentEnv map[string]string) string {
+	home := claudeSubprocessHome()
+	clBin := resolveClaudeBinary()
+	front := []string{
+		filepath.Join(home, ".npm-global", "bin"),
+		filepath.Join(home, ".local", "bin"),
+		"/usr/local/bin",
+	}
+	if clBin != "" {
+		if dir := filepath.Dir(clBin); dir != "" && dir != "." {
+			front = append([]string{dir}, front...)
+		}
+	}
+	pathAug := augmentPathFront(home, os.Getenv("PATH"), front...)
+	return mergeSessionExports(
+		fmt.Sprintf("export HOME=%q PATH=%q TERM=xterm-256color", home, pathAug),
+		shellExportsFromAgentEnv(agentEnv),
+	)
+}
+
 // buildAgentCommand builds shell fragment (no export prefix) and environment exports for tmux bash -c.
 func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[string]string) (cmd string, env string, err error) {
 	switch agent {
@@ -66,31 +140,41 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 		}
 		return base, env, nil
 	default:
+		clBin := resolveClaudeBinary()
+		if clBin == "" {
+			return "", "", fmt.Errorf("claude CLI not found on server (install Claude Code or set PLANULIX_CLAUDE_BIN)")
+		}
 		modelFlag := ""
 		if model != "" {
 			modelFlag = fmt.Sprintf(" --model %s", model)
 		}
-		env = mergeSessionExports(claudeEnv, shellExportsFromAgentEnv(agentEnv))
+		env = claudeExportsForShell(agentEnv)
+		q := strconv.Quote(clBin)
 		if mode == "task" {
 			if prompt == "" {
 				return "", "", fmt.Errorf("prompt is required for task mode")
 			}
-			return fmt.Sprintf("%s --dangerously-skip-permissions%s -p %q", claudeBinDefault, modelFlag, prompt), env, nil
+			return fmt.Sprintf("%s --dangerously-skip-permissions%s -p %q", q, modelFlag, prompt), env, nil
 		}
-		return fmt.Sprintf("%s --dangerously-skip-permissions%s", claudeBinDefault, modelFlag), env, nil
+		return fmt.Sprintf("%s --dangerously-skip-permissions%s", q, modelFlag), env, nil
 	}
 }
 
 // buildClaudeResumeShell returns a bash -c script for one-shot resume + print.
 func buildClaudeResumeShell(cwd, claudeSessionID, text string, agentEnv map[string]string, model string) string {
-	env := mergeSessionExports(claudeEnv, shellExportsFromAgentEnv(agentEnv))
+	clBin := resolveClaudeBinary()
+	if clBin == "" {
+		return "echo missing_claude_binary; exit 1"
+	}
+	env := claudeExportsForShell(agentEnv)
 	modelFlag := ""
 	if m := strings.TrimSpace(model); m != "" {
 		modelFlag = " --model " + m
 	}
+	q := strconv.Quote(clBin)
 	return fmt.Sprintf(
 		"%s && cd %q && %s --dangerously-skip-permissions%s --resume %s -p %q",
-		env, cwd, claudeBinDefault, modelFlag, claudeSessionID, text,
+		env, cwd, q, modelFlag, claudeSessionID, text,
 	)
 }
 

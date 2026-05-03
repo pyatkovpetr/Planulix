@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../providers/app_state.dart';
+import '../../services/ssh_vps_socks_tunnel.dart';
 import '../../utils/chat_models.dart';
 
 class ClaudeChatPanel extends StatefulWidget {
@@ -42,6 +43,24 @@ class _PendingAttachment {
 }
 
 class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
+  /// Normalizes workspace paths so list API `cwd` / `projectPath` match picker output.
+  String _normalizeWorkspacePath(String? path) {
+    var p = (path ?? '').trim();
+    while (p.length > 1 && p.endsWith('/')) {
+      p = p.substring(0, p.length - 1);
+    }
+    return p;
+  }
+
+  bool _sessionMatchesProject(dynamic session, String? workspace) {
+    if (workspace == null || workspace.isEmpty) return false;
+    final nw = _normalizeWorkspacePath(workspace);
+    if (nw.isEmpty) return false;
+    final cwd = _normalizeWorkspacePath(session['cwd']?.toString());
+    final pp = _normalizeWorkspacePath(session['projectPath']?.toString());
+    return nw == cwd || nw == pp;
+  }
+
   /// Same roots as session screen + macOS /Users for local hints.
   static final _chatPathRegex = RegExp(
     r'(/(?:home|tmp|root|etc|var|usr|opt|Users)/[\w./\-]+)',
@@ -212,9 +231,11 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
     setState(() => _loading = true);
     try {
       final state = context.read<AppState>();
-      // Look for existing session with matching cwd
+      // Match server `cwd` or inferred `projectPath` (trailing slash tolerant).
       final existing = state.sessions.firstWhere(
-        (s) => s['cwd'] == widget.projectPath && s['isActive'] == true,
+        (s) =>
+            _sessionMatchesProject(s, widget.projectPath) &&
+            s['isActive'] == true,
         orElse: () => null,
       );
       if (existing != null) {
@@ -836,9 +857,15 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
           agent: state.agentScope == 'Kimi' ? 'kimi-cli' : null,
           agentEnv: state.agentEnvForServer(),
         );
-        final session = data['session'];
-        final id = (session is Map) ? session['id'] : null;
-        if (id is! String) {
+        final sessionRaw = data['session'];
+        String? id;
+        if (sessionRaw is Map) {
+          final idObj = sessionRaw['id'];
+          if (idObj != null) {
+            id = idObj.toString();
+          }
+        }
+        if (id == null || id.isEmpty) {
           throw StateError('createSession: missing session.id in response');
         }
         _sessionId = id;
@@ -1490,65 +1517,46 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
     }
   }
 
-  static Process? _socksProxy;
-  static bool _proxyRunning = false;
-  static const _socksPort = 1080;
-
-  Future<void> _ensureSocksProxy() async {
-    // Reuse existing tunnel if still alive; reset if child exited.
-    if (_proxyRunning && _socksProxy != null) return;
+  Future<bool> _ensureSocksProxy() async {
+    if (SshVpsSocksTunnel.isLive) return true;
 
     final messenger = ScaffoldMessenger.of(context);
-    final baseUrl = context.read<AppState>().api.baseUrl;
-    final host = Uri.tryParse(baseUrl)?.host;
-    if (host == null || host.isEmpty) {
+    final t = context.read<AppState>().gatewayVpsTunnelTarget;
+    if (t == null) {
       messenger.showSnackBar(
         const SnackBar(
-          content: Text('SOCKS proxy: server host not configured'),
+          content: Text('SOCKS: нет хоста в Server URL или профиль не выбран'),
           backgroundColor: Color(0xFFef4444),
         ),
       );
-      return;
+      return false;
     }
 
-    // Start SSH SOCKS5 proxy: ssh -D 1080 -N -o ... claude@host
-    try {
-      _socksProxy = await Process.start('ssh', [
-        '-D',
-        '$_socksPort',
-        '-N',
-        '-o',
-        'StrictHostKeyChecking=no',
-        '-o',
-        'ServerAliveInterval=30',
-        '-o',
-        'ExitOnForwardFailure=yes',
-        'claude@$host',
-      ]);
-      _proxyRunning = true;
-
-      // Clear static refs when the tunnel dies so the next call spawns a fresh one.
-      _socksProxy!.exitCode.then((_) {
-        _proxyRunning = false;
-        _socksProxy = null;
-      });
-
-      // Wait a moment for tunnel to establish
-      await Future.delayed(const Duration(seconds: 1));
-    } catch (e) {
-      if (!mounted) return;
+    final err = await SshVpsSocksTunnel.ensureRunning(
+      host: t.host,
+      sshUser: t.sshUser,
+      sshPort: t.sshPort,
+    );
+    if (!mounted) return false;
+    if (err != null) {
       messenger.showSnackBar(
         SnackBar(
-          content: Text('SOCKS proxy failed: $e'),
+          content: Text('SSH SOCKS: $err'),
           backgroundColor: const Color(0xFFef4444),
         ),
       );
+      return false;
     }
+    return true;
   }
 
   Future<void> _browseUrl() async {
     final controller = TextEditingController(text: 'https://google.com');
     if (!mounted) return;
+    final tunnel = context.read<AppState>().gatewayVpsTunnelTarget;
+    final tunnelHint = tunnel != null
+        ? '${tunnel.sshUser}@${tunnel.host}:${tunnel.sshPort}'
+        : 'настройте Server URL и SSH в Settings';
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1564,11 +1572,11 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Opens Chrome via SSH SOCKS proxy through the remote server. All traffic routes through VPS.\n\n'
-              '• Any URL — browsed from the server\'s IP\n'
-              '• localhost:PORT — reaches server\'s local services',
-              style: TextStyle(
+            Text(
+              'Chrome через SSH SOCKS5 к $tunnelHint. '
+              'Исходящий IP как у этого VPS.\n\n'
+              'HTTPS — через IP сервера; localhost:PORT — сервисы на VPS.',
+              style: const TextStyle(
                 fontSize: 11,
                 color: Color(0xFF94a3b8),
                 height: 1.4,
@@ -1617,22 +1625,22 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
               child: Row(
                 children: [
                   Icon(
-                    _proxyRunning
+                    SshVpsSocksTunnel.isLive
                         ? Icons.check_circle
                         : Icons.radio_button_unchecked,
                     size: 12,
-                    color: _proxyRunning
+                    color: SshVpsSocksTunnel.isLive
                         ? const Color(0xFF22c55e)
                         : const Color(0xFF64748b),
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    _proxyRunning
-                        ? 'SOCKS proxy active on :$_socksPort'
-                        : 'SOCKS proxy will start automatically',
+                    SshVpsSocksTunnel.isLive
+                        ? 'SOCKS active :${SshVpsSocksTunnel.socksPort}'
+                        : 'SOCKS запустится при открытии',
                     style: TextStyle(
                       fontSize: 10,
-                      color: _proxyRunning
+                      color: SshVpsSocksTunnel.isLive
                           ? const Color(0xFF22c55e)
                           : const Color(0xFF64748b),
                     ),
@@ -1659,26 +1667,27 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
     );
     if (result == null || result.isEmpty || !mounted) return;
 
-    // Start SOCKS proxy if not running
-    await _ensureSocksProxy();
+    final okTunnel = await _ensureSocksProxy();
+    if (!okTunnel || !mounted) return;
 
-    // Open Chrome with proxy
-    try {
-      await Process.run('open', [
-        '-na',
-        'Google Chrome',
-        '--args',
-        '--proxy-server=socks5://127.0.0.1:$_socksPort',
-        '--user-data-dir=/tmp/planulix-chrome-proxy',
-        result,
-      ]);
-    } catch (e) {
-      // Fallback: try opening without Chrome-specific args
-      if (mounted) {
-        try {
-          await Process.run('open', [result]);
-        } catch (_) {}
+    final messenger = ScaffoldMessenger.of(context);
+    if (Platform.isMacOS) {
+      final ok = await SshVpsSocksTunnel.openChromeWithSocksMacos(result);
+      if (!mounted) return;
+      if (!ok) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Не удалось открыть Chrome с SOCKS')),
+        );
       }
+    } else {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'На этой платформе Chrome+SOCKS не подключены — открываю браузер по умолчанию (IP будет ваш локальный, не VPS).',
+          ),
+        ),
+      );
+      await SshVpsSocksTunnel.openUrlFallbackBrowser(result);
     }
   }
 

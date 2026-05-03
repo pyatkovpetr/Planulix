@@ -158,6 +158,8 @@ class AppState extends ChangeNotifier {
       name: 'Default',
       baseUrl: api.baseUrl,
       token: api.authToken ?? '',
+      sshUser: null,
+      sshPort: null,
     );
     serverProfiles = [p];
     activeProfileId = p.id;
@@ -215,6 +217,54 @@ class AppState extends ChangeNotifier {
     if (activeProfileId != null) {
       await prefs.setString(_kActiveProfile, activeProfileId!);
     }
+    notifyListeners();
+  }
+
+  /// Хост gateway из активного профиля + пользователь/port SSH для SOCKS5-туннеля до того же VPS.
+  ({String host, String sshUser, int sshPort})? get gatewayVpsTunnelTarget {
+    final p = activeProfile;
+    if (p == null) return null;
+    final normalized = ApiClient.normalizeApiBaseUrl(p.baseUrl);
+    final uri = Uri.tryParse(normalized);
+    final host = uri?.host;
+    if (host == null || host.isEmpty) return null;
+    return (
+      host: host,
+      sshUser: p.resolvedSshUser,
+      sshPort: p.resolvedSshPort,
+    );
+  }
+
+  /// Сохраняет SSH-поля для OAuth/браузера через VPS (профиль).
+  Future<void> saveGatewaySshForActiveProfile({
+    required String sshUserRaw,
+    required int sshPort,
+  }) async {
+    await _migrateLegacyProfileIfNeeded();
+    if (activeProfileId == null || serverProfiles.isEmpty) {
+      await _ensureProfileForCurrentConnection(name: 'Default');
+    }
+    final id = activeProfileId;
+    if (id == null) return;
+    final u = sshUserRaw.trim();
+    final userStored = u.isEmpty ? null : u;
+    final portStored = sshPort > 0 && sshPort < 65536 ? sshPort : 22;
+
+    serverProfiles = serverProfiles
+        .map((p) {
+          if (p.id != id) return p;
+          return ServerProfile(
+            id: p.id,
+            name: p.name,
+            baseUrl: p.baseUrl,
+            token: p.token,
+            sshUser: userStored,
+            sshPort: portStored,
+          );
+        })
+        .toList();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kProfiles, ServerProfile.listToJson(serverProfiles));
     notifyListeners();
   }
 
@@ -397,6 +447,8 @@ class AppState extends ChangeNotifier {
             name: p.name,
             baseUrl: url,
             token: tok,
+            sshUser: p.sshUser,
+            sshPort: p.sshPort,
           );
         }
         return p;
@@ -426,6 +478,8 @@ class AppState extends ChangeNotifier {
         name: name,
         baseUrl: url,
         token: tok,
+        sshUser: null,
+        sshPort: null,
       );
       serverProfiles = [...serverProfiles, p];
       activeProfileId = p.id;
@@ -470,7 +524,8 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> createSession({
+  /// Creates a remote tmux-backed session. Returns `false` on API failure ([error] is set).
+  Future<bool> createSession({
     String? cwd,
     String? prompt,
     String? name,
@@ -489,9 +544,11 @@ class AppState extends ChangeNotifier {
         agentEnv: agentEnvForServer(),
       );
       await refreshSessions();
+      return true;
     } catch (e) {
       error = e.toString();
       notifyListeners();
+      return false;
     }
   }
 
