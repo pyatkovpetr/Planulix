@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -259,25 +258,6 @@ func (s *SessionServer) StartAgentAuth(c *gin.Context) {
 	}(cmd)
 
 	c.JSON(200, gin.H{"ok": true, "agent": agentID})
-}
-
-func authCodeFromInput(code, callbackURL string) string {
-	code = strings.TrimSpace(code)
-	if code != "" && !strings.Contains(code, "://") {
-		return code
-	}
-	raw := strings.TrimSpace(callbackURL)
-	if raw == "" {
-		raw = code
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return code
-	}
-	if v := strings.TrimSpace(u.Query().Get("code")); v != "" {
-		return v
-	}
-	return code
 }
 
 func (s *SessionServer) SubmitAgentAuthCode(c *gin.Context) {

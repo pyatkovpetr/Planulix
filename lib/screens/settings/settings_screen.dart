@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -1465,19 +1466,128 @@ curl -fsSL $_kPlanulixInstallScript \\
     }
   }
 
-  String _oauthCodeFromText(String raw) {
-    final text = raw.trim();
-    if (text.isEmpty) return '';
-    try {
-      final uri = Uri.parse(text);
-      final code = uri.queryParameters['code'];
-      if (code != null && code.trim().isNotEmpty) return code.trim();
-    } catch (_) {}
-    return text;
+  String _oauthCodeFromText(String raw0) {
+    var raw = raw0.trim().replaceAll(RegExp(r'[\r\n]+'), '');
+    if (raw.isEmpty) return '';
+
+    String? fromPairs(String blob) {
+      if (blob.trim().isEmpty) return null;
+      for (final part in blob.split('&')) {
+        final segment = part.trim();
+        if (segment.isEmpty) continue;
+        final eq = segment.indexOf('=');
+        if (eq <= 0) continue;
+        final k = segment.substring(0, eq).trim();
+        if (k != 'code') continue;
+        final v = segment.substring(eq + 1);
+        try {
+          return Uri.decodeComponent(v).trim();
+        } catch (_) {
+          return v.trim();
+        }
+      }
+      return null;
+    }
+
+    String queryLike(String s) {
+      final i = s.indexOf('?');
+      if (i >= 0) return s.substring(i + 1).trim();
+      return s;
+    }
+
+    String? plainCodeAmpersandState(String s) {
+      final idx = s.indexOf('&state=');
+      if (idx <= 0) return null;
+      final pfx = s.substring(0, idx).trim();
+      if (pfx.isEmpty) return null;
+      if (pfx.contains('=') ||
+          pfx.contains('?') ||
+          pfx.contains('/') ||
+          pfx.contains(' ')) {
+        return null;
+      }
+      return pfx;
+    }
+
+    String? extractPaste(String s) {
+      final t = s.trim();
+      if (t.isEmpty) return null;
+
+      final uri = Uri.tryParse(t);
+      if (uri != null &&
+          uri.hasScheme &&
+          t.contains('://') &&
+          uri.query.isNotEmpty) {
+        final c = fromPairs(uri.query);
+        if (c != null && c.isNotEmpty) return c;
+      }
+
+      final qb = queryLike(t);
+      final qp = fromPairs(qb);
+      if (qp != null && qp.isNotEmpty) return qp;
+
+      final loose = plainCodeAmpersandState(qb);
+      if (loose != null && loose.isNotEmpty) return loose;
+
+      if (!RegExp(r'[&=?/]').hasMatch(t)) {
+        return t;
+      }
+
+      return null;
+    }
+
+    final hit = extractPaste(raw);
+    if (hit != null && hit.isNotEmpty) return hit;
+    return raw;
+  }
+
+  String _oauthCallbackHtml({
+    required String code,
+    required String callbackUrl,
+    required bool submitted,
+    required Object? submitError,
+  }) {
+    const esc = HtmlEscape();
+    final escapedCode = esc.convert(code);
+    final escapedUrl = esc.convert(callbackUrl);
+    final escapedError = submitError == null ? '' : esc.convert('$submitError');
+    final title = submitted
+        ? 'Planulix: OAuth code sent'
+        : 'Planulix: copy this OAuth code';
+    final body = submitted
+        ? 'The code was sent to the CLI. You can close this tab and return to Planulix.'
+        : submitError == null
+        ? 'Copy the code below and paste it into the field in Planulix, then click "Send code to CLI". Use each code only once.'
+        : 'Automatic submit failed. Copy the code below and paste it into the field in Planulix. If that still fails with 404, deploy the updated gateway first.';
+
+    return '''
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>$title</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 40px; line-height: 1.45; color: #111827; }
+      code, textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      textarea { width: min(920px, 100%); height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 10px; font-size: 13px; }
+      button { margin-top: 12px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4f46e5; color: white; cursor: pointer; }
+      .muted { color: #6b7280; }
+      .error { margin-top: 20px; padding: 12px; border-radius: 10px; background: #fee2e2; color: #991b1b; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h2>$title</h2>
+    <p>$body</p>
+    <textarea id="code" readonly>$escapedCode</textarea><br>
+    <button onclick="navigator.clipboard.writeText(document.getElementById('code').value).then(() => this.textContent = 'Copied')">Copy code</button>
+    <p class="muted">Callback URL: <code>$escapedUrl</code></p>
+    ${submitError == null ? '' : '<div class="error">$escapedError</div>'}
+  </body>
+</html>
+''';
   }
 
   Future<HttpServer?> _startLocalOAuthCallbackListener({
-    required AppState state,
     required String agentId,
     required String authUrl,
     required void Function(String line) onLog,
@@ -1497,26 +1607,21 @@ curl -fsSL $_kPlanulixInstallScript \\
         await for (final req in server) {
           final callbackUrl = req.requestedUri.toString();
           final code = req.uri.queryParameters['code'] ?? '';
-          try {
-            await state.api.setupAgentAuthSubmit(
-              agentId,
+          req.response.statusCode = 200;
+          req.response.headers.contentType = ContentType.html;
+          req.response.write(
+            _oauthCallbackHtml(
               code: code,
               callbackUrl: callbackUrl,
-            );
-            req.response.statusCode = 200;
-            req.response.headers.contentType = ContentType.html;
-            req.response.write(
-              '<html><body style="font-family:sans-serif"><h2>Planulix: OAuth code sent</h2><p>You can close this tab and return to Planulix.</p></body></html>',
-            );
-            onLog('[planulix] OAuth callback captured and sent to CLI.');
-          } catch (e) {
-            req.response.statusCode = 500;
-            req.response.write('Planulix failed to send OAuth code: $e');
-            onLog('[planulix] Callback submit failed: $e');
-          } finally {
-            await req.response.close();
-            await server.close(force: true);
-          }
+              submitted: false,
+              submitError: null,
+            ),
+          );
+          onLog(
+            '[planulix] OAuth callback captured. Copy the code from browser and send it once.',
+          );
+          await req.response.close();
+          await server.close(force: true);
           break;
         }
       }());
@@ -1623,7 +1728,6 @@ curl -fsSL $_kPlanulixInstallScript \\
                 if (ctx.mounted) {
                   await localCallbackServer?.close(force: true);
                   localCallbackServer = await _startLocalOAuthCallbackListener(
-                    state: state,
                     agentId: agentId,
                     authUrl: openedUrl,
                     onLog: (line) {
