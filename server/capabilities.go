@@ -126,7 +126,7 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 				Label:      "Kimi",
 				Command:    "kimi",
 				Installed:  kimiInstalled,
-				Configured: kimiInstalled || envAny("KIMI_API_KEY", "MOONSHOT_API_KEY"),
+				Configured: envAny("KIMI_API_KEY", "MOONSHOT_API_KEY"),
 				Ready:      kimiInstalled && kimiSmoke.OK,
 				Smoke:      kimiSmoke,
 				Version:    commandVersion(kimiBin),

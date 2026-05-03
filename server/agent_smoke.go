@@ -71,11 +71,39 @@ func (st *agentSmokeStore) set(id string, r AgentSmokeResult) {
 var globalAgentSmoke = newAgentSmokeStore()
 
 func runAgentSmokeTest(agentID string, timeout time.Duration) AgentSmokeResult {
+	return runAgentSmokeTestWithEnv(agentID, timeout, nil)
+}
+
+func envMapAny(agentEnv map[string]string, keys ...string) bool {
+	for _, key := range keys {
+		if strings.TrimSpace(agentEnv[key]) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func agentAuthConfiguredForSmoke(agentID, bin string, agentEnv map[string]string) bool {
+	switch agentID {
+	case "claude-code":
+		return bin != "" && (envMapAny(agentEnv, "ANTHROPIC_API_KEY") || envAny("ANTHROPIC_API_KEY") || claudeAuthStatusOK(bin))
+	case "kimi-cli":
+		return envMapAny(agentEnv, "KIMI_API_KEY", "MOONSHOT_API_KEY") || envAny("KIMI_API_KEY", "MOONSHOT_API_KEY")
+	case "codex-cli":
+		return envMapAny(agentEnv, "OPENAI_API_KEY") || envAny("OPENAI_API_KEY")
+	default:
+		return agentAuthConfigured(agentID, bin)
+	}
+}
+
+func runAgentSmokeTestWithEnv(agentID string, timeout time.Duration, agentEnv map[string]string) AgentSmokeResult {
 	agentID = normalizeSetupAgentID(agentID)
-	if resolveAgentCommand(agentID) == "" {
+	agentEnv = mergeAgentEnvPreferred(agentEnv, nil)
+	bin := resolveAgentCommand(agentID)
+	if bin == "" {
 		return AgentSmokeResult{OK: false, CheckedAt: time.Now().UnixMilli(), Log: "CLI binary not found"}
 	}
-	if !agentAuthConfigured(agentID, resolveAgentCommand(agentID)) {
+	if !agentAuthConfiguredForSmoke(agentID, bin, agentEnv) {
 		return AgentSmokeResult{OK: false, CheckedAt: time.Now().UnixMilli(), Log: "CLI is installed but not authenticated/configured"}
 	}
 
@@ -84,7 +112,7 @@ func runAgentSmokeTest(agentID string, timeout time.Duration) AgentSmokeResult {
 		home = "."
 	}
 	prompt := "Reply with exactly: PLANULIX_OK"
-	cmdFrag, env, err := buildAgentCommand(agentID, "task", home, prompt, "", nil)
+	cmdFrag, env, err := buildAgentCommand(agentID, "task", home, prompt, "", agentEnv)
 	if err != nil {
 		return AgentSmokeResult{OK: false, CheckedAt: time.Now().UnixMilli(), Log: err.Error()}
 	}
@@ -115,8 +143,12 @@ func agentSmokeCached(agentID string) AgentSmokeResult {
 }
 
 func runAndStoreAgentSmokeTest(agentID string, timeout time.Duration) AgentSmokeResult {
+	return runAndStoreAgentSmokeTestWithEnv(agentID, timeout, nil)
+}
+
+func runAndStoreAgentSmokeTestWithEnv(agentID string, timeout time.Duration, agentEnv map[string]string) AgentSmokeResult {
 	agentID = normalizeSetupAgentID(agentID)
-	r := runAgentSmokeTest(agentID, timeout)
+	r := runAgentSmokeTestWithEnv(agentID, timeout, agentEnv)
 	globalAgentSmoke.set(agentID, r)
 	return r
 }

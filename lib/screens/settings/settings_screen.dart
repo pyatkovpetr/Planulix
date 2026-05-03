@@ -1395,6 +1395,160 @@ curl -fsSL $_kPlanulixInstallScript \\
     }.contains(agentId);
   }
 
+  String? _agentApiKeyStoreKey(String agentId) {
+    switch (agentId) {
+      case 'kimi-cli':
+        return 'kimi';
+      case 'claude-code':
+        return 'anthropic';
+      case 'codex-cli':
+        return 'openai';
+      default:
+        return null;
+    }
+  }
+
+  TextEditingController? _agentApiKeyController(String key) {
+    switch (key) {
+      case 'kimi':
+        return _kimiKeyController;
+      case 'anthropic':
+        return _anthropicKeyController;
+      case 'openai':
+        return _openaiKeyController;
+      default:
+        return null;
+    }
+  }
+
+  String _agentApiKeyLabel(String key) {
+    switch (key) {
+      case 'kimi':
+        return 'Moonshot / Kimi API key';
+      case 'anthropic':
+        return 'Anthropic API key';
+      case 'openai':
+        return 'OpenAI API key';
+      default:
+        return 'API key';
+    }
+  }
+
+  String _agentSmokeFailureReason(String agentId, String log) {
+    final lower = log.toLowerCase();
+    if (lower.contains('not authenticated') ||
+        lower.contains('not configured')) {
+      switch (agentId) {
+        case 'kimi-cli':
+          return 'Kimi CLI установлен, но gateway не видит KIMI_API_KEY/MOONSHOT_API_KEY.';
+        case 'claude-code':
+          return 'Claude CLI установлен, но нет ANTHROPIC_API_KEY или успешного claude auth login.';
+        case 'codex-cli':
+          return 'Codex CLI установлен, но gateway не видит OPENAI_API_KEY.';
+      }
+    }
+    if (lower.contains('api key') || lower.contains('unauthorized')) {
+      return 'Похоже, агенту нужен или неверно задан API key.';
+    }
+    if (lower.contains('timed out')) {
+      return 'Тестовый запрос не ответил вовремя. Проверьте сеть, модель и лимиты провайдера.';
+    }
+    if (log.trim().isEmpty) return 'Тест завершился без подробного лога.';
+    return 'Агент вернул ошибку во время тестового сообщения.';
+  }
+
+  Future<bool> _promptAgentApiKeyForSmoke({
+    required BuildContext context,
+    required AppState state,
+    required String agentId,
+    required String label,
+  }) async {
+    final key = _agentApiKeyStoreKey(agentId);
+    if (key == null) return false;
+    final controller = TextEditingController(
+      text: _agentApiKeyController(key)?.text ?? state.agentApiKeys[key] ?? '',
+    );
+    var moonshotIntl = state.moonshotInternational;
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1e293b),
+          title: Text(
+            'API key для $label',
+            style: const TextStyle(color: Color(0xFFf1f5f9), fontSize: 18),
+          ),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Ключ сохранится локально в Planulix и будет передан в smoke test / новые сессии как agentEnv.',
+                  style: TextStyle(
+                    color: Color(0xFFcbd5e1),
+                    fontSize: 12,
+                    height: 1.35,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  obscureText: true,
+                  autofocus: true,
+                  decoration: _inputDecoration(_agentApiKeyLabel(key)),
+                ),
+                if (key == 'kimi') ...[
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Международный Moonshot (api.moonshot.ai)',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                    subtitle: const Text(
+                      'Выключите для platform.moonshot.cn.',
+                      style: TextStyle(fontSize: 11, color: Color(0xFF94a3b8)),
+                    ),
+                    value: moonshotIntl,
+                    onChanged: (v) => setDialogState(() => moonshotIntl = v),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Сохранить и повторить тест'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved != true) {
+      controller.dispose();
+      return false;
+    }
+
+    final value = controller.text.trim();
+    controller.dispose();
+    if (value.isEmpty) return false;
+    _agentApiKeyController(key)?.text = value;
+    if (key == 'kimi' && state.moonshotInternational != moonshotIntl) {
+      await state.setMoonshotInternational(moonshotIntl);
+    }
+    final next = Map<String, String>.from(state.agentApiKeys);
+    next[key] = value;
+    await state.persistAgentApiKeys(next);
+    return true;
+  }
+
   Future<bool> _ensureSocksProxyForAuth(BuildContext context) async {
     if (SshVpsSocksTunnel.isLive) return true;
     final messenger = ScaffoldMessenger.of(context);
@@ -1839,7 +1993,10 @@ curl -fsSL $_kPlanulixInstallScript \\
     Map<String, dynamic>? res;
     Object? thrown;
     try {
-      res = await state.api.setupAgentSmokeTest(agentId);
+      res = await state.api.setupAgentSmokeTest(
+        agentId,
+        agentEnv: state.agentEnvForServer(),
+      );
     } catch (e, st) {
       thrown = e;
       debugPrint('setupAgentSmokeTest($agentId) $e\n$st');
@@ -1854,6 +2011,8 @@ curl -fsSL $_kPlanulixInstallScript \\
     final log = smoke is Map
         ? '${smoke['log'] ?? ''}'.trim()
         : '${res?['error'] ?? thrown ?? ''}'.trim();
+    final keyKind = _agentApiKeyStoreKey(agentId);
+    final reason = ok ? '' : _agentSmokeFailureReason(agentId, log);
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1862,20 +2021,85 @@ curl -fsSL $_kPlanulixInstallScript \\
           ok ? '$label готов к работе' : '$label не прошёл тест',
           style: const TextStyle(color: Color(0xFFf1f5f9), fontSize: 18),
         ),
-        content: SelectableText(
-          log.isEmpty
-              ? (ok
-                    ? 'Тестовое сообщение прошло успешно.'
-                    : 'Тест не вернул подробный лог.')
-              : log,
-          style: const TextStyle(
-            fontFamily: 'monospace',
-            fontSize: 11,
-            color: Color(0xFFcbd5e1),
-            height: 1.35,
+        content: SizedBox(
+          width: 520,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                ok ? 'Тестовое сообщение прошло успешно.' : reason,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.35,
+                  color: ok ? const Color(0xFF86efac) : const Color(0xFFfecaca),
+                ),
+              ),
+              if (!ok && keyKind != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Можно сохранить ${_agentApiKeyLabel(keyKind)} и сразу повторить тест.',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFFcbd5e1),
+                    height: 1.35,
+                  ),
+                ),
+              ],
+              if (log.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  'Лог теста:',
+                  style: TextStyle(fontSize: 11, color: Color(0xFF94a3b8)),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 220),
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0f172a),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF334155)),
+                  ),
+                  child: SingleChildScrollView(
+                    child: SelectableText(
+                      log,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                        color: Color(0xFFcbd5e1),
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
         actions: [
+          if (!ok && keyKind != null)
+            FilledButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                final saved = await _promptAgentApiKeyForSmoke(
+                  context: context,
+                  state: state,
+                  agentId: agentId,
+                  label: label,
+                );
+                if (saved && context.mounted) {
+                  await _smokeTestAgentCliFromServer(
+                    context,
+                    state,
+                    agentId,
+                    label,
+                  );
+                }
+              },
+              child: const Text('Ввести API key и повторить'),
+            ),
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('OK'),
@@ -1919,6 +2143,10 @@ curl -fsSL $_kPlanulixInstallScript \\
     final installed = res?['installed'] == true;
     final smoke = res?['smoke'];
     final smokeLog = smoke is Map ? '${smoke['log'] ?? ''}'.trim() : '';
+    final keyKind = _agentApiKeyStoreKey(agentId);
+    final smokeReason = smokeLog.isEmpty
+        ? ''
+        : _agentSmokeFailureReason(agentId, smokeLog);
     final gatewayNeedsUpdate = res?['gatewayNeedsUpdate'] == true;
     final log = '${res?['log'] ?? ''}'.trim();
     final err = '${res?['error'] ?? ''}'.trim();
@@ -1983,6 +2211,28 @@ curl -fsSL $_kPlanulixInstallScript \\
                     ),
                   ),
                 ),
+              if (!ok && installed && smokeReason.isNotEmpty) ...[
+                Text(
+                  smokeReason,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFFfecaca),
+                    height: 1.35,
+                  ),
+                ),
+                if (keyKind != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Можно сохранить ${_agentApiKeyLabel(keyKind)} и сразу повторить тест.',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFFcbd5e1),
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 8),
+              ],
               if (log.isNotEmpty || smokeLog.isNotEmpty)
                 SelectableText(
                   smokeLog.isEmpty ? log : '$log\n\nSmoke test:\n$smokeLog',
@@ -2002,6 +2252,27 @@ curl -fsSL $_kPlanulixInstallScript \\
           ),
         ),
         actions: [
+          if (!ok && installed && keyKind != null)
+            FilledButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                final saved = await _promptAgentApiKeyForSmoke(
+                  context: context,
+                  state: state,
+                  agentId: agentId,
+                  label: label,
+                );
+                if (saved && context.mounted) {
+                  await _smokeTestAgentCliFromServer(
+                    context,
+                    state,
+                    agentId,
+                    label,
+                  );
+                }
+              },
+              child: const Text('Ввести API key и повторить'),
+            ),
           if (gatewayNeedsUpdate)
             TextButton(
               onPressed: () async {

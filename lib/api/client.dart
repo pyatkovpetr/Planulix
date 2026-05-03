@@ -712,9 +712,13 @@ class ApiClient {
     );
   }
 
-  Future<Map<String, dynamic>> setupAgentSmokeTest(String agentId) async {
+  Future<Map<String, dynamic>> setupAgentSmokeTest(
+    String agentId, {
+    Map<String, String>? agentEnv,
+  }) async {
     final res = await _dio.post(
       '/setup/agents/${Uri.encodeComponent(agentId)}/smoke',
+      data: {if (agentEnv != null && agentEnv.isNotEmpty) 'agentEnv': agentEnv},
       options: Options(receiveTimeout: const Duration(minutes: 2)),
     );
     return Map<String, dynamic>.from(res.data as Map? ?? {});

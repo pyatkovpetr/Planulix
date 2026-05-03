@@ -342,7 +342,11 @@ func (s *SessionServer) SmokeTestAgent(c *gin.Context) {
 		c.JSON(400, gin.H{"ok": false, "agent": agentID, "error": "agent CLI is not installed"})
 		return
 	}
-	result := runAndStoreAgentSmokeTest(agentID, 90*time.Second)
+	var req struct {
+		AgentEnv map[string]string `json:"agentEnv"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	result := runAndStoreAgentSmokeTestWithEnv(agentID, 90*time.Second, req.AgentEnv)
 	payload := gin.H{
 		"ok":     result.OK,
 		"agent":  agentID,
