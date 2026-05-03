@@ -600,6 +600,13 @@ class ApiClient {
       if (e.response?.statusCode == 404 && agentId == 'claude-code') {
         return setupClaudeCodeAuthStart();
       }
+      if (e.response?.statusCode == 409) {
+        await setupAgentAuthStop(agentId);
+        final retry = await _dio.post(
+          '/setup/agents/${Uri.encodeComponent(agentId)}/auth/start',
+        );
+        return Map<String, dynamic>.from(retry.data as Map? ?? {});
+      }
       rethrow;
     }
   }

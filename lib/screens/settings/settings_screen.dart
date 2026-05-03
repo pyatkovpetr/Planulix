@@ -1574,7 +1574,9 @@ curl -fsSL $_kPlanulixInstallScript \\
       setState(() => _authorizingAgents.remove(agentId));
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Не удалось запустить auth wizard: $e'),
+          content: Text(
+            'Не удалось запустить auth wizard. Если раньше открывали авторизацию, она будет сброшена автоматически при следующем запуске. $e',
+          ),
           backgroundColor: const Color(0xFFef4444),
         ),
       );
