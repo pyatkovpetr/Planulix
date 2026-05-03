@@ -171,6 +171,22 @@ func modelFlagValue(model string) string {
 	}
 }
 
+// cursorCLIAllowedModel rejects Anthropic/Kimi/other provider ids accidentally sent while a Claude tab/model picker is visible.
+func cursorCLIAllowedModel(model string) string {
+	m := modelFlagValue(model)
+	if m == "" {
+		return ""
+	}
+	l := strings.ToLower(m)
+	if strings.Contains(l, "claude") {
+		return ""
+	}
+	if strings.Contains(l, "kimi") || strings.Contains(l, "moonshot") {
+		return ""
+	}
+	return model
+}
+
 func agentTmuxPrefix(agent string) string {
 	switch normalizeRequestedAgent(agent, "") {
 	case "kimi-cli":
@@ -230,7 +246,7 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 		}
 		env = genericAgentExports(agentEnv)
 		modelFlag := ""
-		if m := modelFlagValue(model); m != "" {
+		if m := cursorCLIAllowedModel(model); m != "" {
 			modelFlag = fmt.Sprintf(" --model %q", m)
 		}
 		q := strconv.Quote(bin)

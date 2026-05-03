@@ -187,10 +187,14 @@ func (s *SessionServer) resolveJSONLPath(clientID string) (jsonlPath, canonicalI
 	if jsonlPath == "" {
 		if p, a := s.findDiscoveredAgentHistoryPath(clientID); p != "" {
 			jsonlPath = p
-			if a != "" {
+			if a != "" && !strings.HasPrefix(clientID, "cd-") {
 				agent = a
 			}
 		}
+	}
+	// Persisted Planulix managed rows (`cd-*`) are authoritative for agent routing — in-memory tmux state can transiently diverge.
+	if strings.HasPrefix(clientID, "cd-") && rec != nil && strings.TrimSpace(rec.Agent) != "" {
+		agent = strings.TrimSpace(rec.Agent)
 	}
 	return jsonlPath, canonicalID, agent, tmuxAlive
 }
@@ -227,6 +231,11 @@ func (s *SessionServer) CollectSessionsList(limit int) ([]SessionInfo, int) {
 		for i, sess := range sessions {
 			if sess.SessionID == ts.ID {
 				sessions[i].IsActive = ts.Status == "running"
+				if sessions[i].Extra == nil {
+					sessions[i].Extra = make(map[string]interface{})
+				}
+				sessions[i].Extra["agent"] = ts.Agent
+				sessions[i].Extra["planulixManaged"] = true
 				found = true
 				break
 			}
@@ -701,6 +710,21 @@ func (s *SessionServer) runKimiResumeSendResult(cwd, sessionUUID, text string, a
 	return answer, nil
 }
 
+func (s *SessionServer) runClaudeResumeSendResult(cwd, claudeSID, text string, agentEnv map[string]string, model, logCtx string) (string, error) {
+	if strings.TrimSpace(text) == "" || strings.TrimSpace(claudeSID) == "" {
+		return "", fmt.Errorf("empty text or session id")
+	}
+	cmd := exec.Command("bash", "-c", buildClaudeResumeShell(cwd, claudeSID, text, agentEnv, model))
+	output, err := cmd.CombinedOutput()
+	outStr := strings.TrimSpace(stripANSI(string(output)))
+	if err != nil {
+		log.Printf("Claude resume send [%s] failed for %s: %v (output: %s)", logCtx, claudeSID, err, outStr)
+		return "", fmt.Errorf("%w: %s", err, outStr)
+	}
+	log.Printf("Claude resume send [%s] ok for %s (bytes=%d)", logCtx, claudeSID, len(outStr))
+	return outStr, nil
+}
+
 func runAgentTaskSendResult(agent, cwd, text string, agentEnv map[string]string, model, logCtx string) (string, error) {
 	if strings.TrimSpace(text) == "" {
 		return "", fmt.Errorf("empty text")
@@ -948,23 +972,28 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 
 		agentEnv := req.AgentEnv
 		model := req.Model
-		go func(sessionID, cwd, text string, env map[string]string, m string) {
-			cmd := exec.Command("bash", "-c", buildClaudeResumeShell(cwd, sessionID, text, env, m))
-			if output, err := cmd.CombinedOutput(); err != nil {
-				log.Printf("Resume send failed for %s: %v (output: %s)", sessionID, err, string(output))
-			} else {
-				log.Printf("Resume send completed for %s", sessionID)
-			}
-		}(claudeSessionID, cwd, req.Text, agentEnv, model)
-
-		log.Printf("Queued message for session %s via --resume -p", claudeSessionID)
-		c.JSON(200, gin.H{"ok": true})
+		answer, err := s.runClaudeResumeSendResult(cwd, claudeSessionID, req.Text, agentEnv, model, "unmanaged")
+		if err != nil {
+			c.JSON(502, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"ok": true, "assistant": answer})
 		return
+	}
+
+	managedAgent := ""
+	if ok {
+		managedAgent = strings.TrimSpace(ts.Agent)
+		if strings.HasPrefix(id, "cd-") && s.agentStore != nil {
+			if r := s.agentStore.Get(id); r != nil && strings.TrimSpace(r.Agent) != "" {
+				managedAgent = strings.TrimSpace(r.Agent)
+			}
+		}
 	}
 
 	// Kimi (managed, linked): interactive tmux often misses multi-byte / pasted input via send-keys.
 	// Use the same one-shot API as the unlinked path — updates context.jsonl Kimi already uses.
-	if ts.Agent == "kimi-cli" && strings.TrimSpace(ts.KimiSession) != "" {
+	if managedAgent == "kimi-cli" && strings.TrimSpace(ts.KimiSession) != "" {
 		uuid := kimiAPIID(ts.KimiSession)
 		cwd := ts.Cwd
 		if cwd == "" {
@@ -989,7 +1018,7 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 		return
 	}
 
-	if ts.Agent == "cursor" {
+	if managedAgent == "cursor" {
 		model := strings.TrimSpace(req.Model)
 		if model == "" {
 			model = ts.Model
@@ -1003,7 +1032,7 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 		return
 	}
 
-	if ts.Agent == "claude-code" {
+	if managedAgent == "claude-code" {
 		if strings.TrimSpace(ts.ClaudeSession) == "" {
 			for i := 0; i < 20; i++ {
 				time.Sleep(500 * time.Millisecond)
@@ -1039,15 +1068,12 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 		if model == "" {
 			model = ts.Model
 		}
-		go func(sessionID, cwd, text string, env map[string]string, m string) {
-			cmd := exec.Command("bash", "-c", buildClaudeResumeShell(cwd, sessionID, text, env, m))
-			if output, err := cmd.CombinedOutput(); err != nil {
-				log.Printf("Claude managed resume send failed for %s: %v (output: %s)", sessionID, err, string(output))
-			} else {
-				log.Printf("Claude managed resume send completed for %s", sessionID)
-			}
-		}(ts.ClaudeSession, cwd, req.Text, req.AgentEnv, model)
-		c.JSON(200, gin.H{"ok": true})
+		answer, err := s.runClaudeResumeSendResult(cwd, ts.ClaudeSession, req.Text, req.AgentEnv, model, "managed-tmux")
+		if err != nil {
+			c.JSON(502, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"ok": true, "assistant": answer})
 		return
 	}
 
