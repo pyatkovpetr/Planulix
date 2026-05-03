@@ -535,12 +535,38 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> setupAgentInstall(String agentId) async {
-    final res = await _dio.post(
-      '/setup/agents/${Uri.encodeComponent(agentId)}'
-      '/install',
-      options: Options(receiveTimeout: const Duration(minutes: 10)),
-    );
-    return Map<String, dynamic>.from(res.data as Map? ?? {});
+    try {
+      final res = await _dio.post(
+        '/setup/agents/${Uri.encodeComponent(agentId)}'
+        '/install',
+        options: Options(receiveTimeout: const Duration(minutes: 10)),
+      );
+      return Map<String, dynamic>.from(res.data as Map? ?? {});
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        // Backward compatibility: older gateways only know Claude's first setup route.
+        if (agentId == 'claude-code') {
+          final res = await _dio.post(
+            '/setup/claude-code/install',
+            options: Options(receiveTimeout: const Duration(minutes: 10)),
+          );
+          return Map<String, dynamic>.from(res.data as Map? ?? {});
+        }
+        return <String, dynamic>{
+          'ok': false,
+          'gatewayNeedsUpdate': true,
+          'agent': agentId,
+          'error':
+              'Этот Planulix Gateway старее клиента и не поддерживает /setup/agents/:id/install.',
+          'log':
+              'Сначала обновите gateway на сервере, затем повторите установку агента.\n\n'
+              'Команда по SSH:\n'
+              'curl -fsSL https://raw.githubusercontent.com/pyatkovpetr/Planulix/main/scripts/install_gateway_remote.sh | AUTH_TOKEN="<ваш токен>" bash -\n\n'
+              'После обновления снова откройте Settings -> CLI-агенты на сервере.',
+        };
+      }
+      rethrow;
+    }
   }
 
   Future<Map<String, dynamic>> setupClaudeCodeAuthStart() async {

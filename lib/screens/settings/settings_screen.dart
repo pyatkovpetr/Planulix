@@ -1156,23 +1156,54 @@ curl -fsSL $_kPlanulixInstallScript \\
     }
 
     final ok = res?['ok'] == true;
+    final gatewayNeedsUpdate = res?['gatewayNeedsUpdate'] == true;
     final log = '${res?['log'] ?? ''}'.trim();
     final err = '${res?['error'] ?? ''}'.trim();
+    final updateCommand =
+        "curl -fsSL https://raw.githubusercontent.com/pyatkovpetr/Planulix/main/scripts/install_gateway_remote.sh | AUTH_TOKEN='${state.api.authToken ?? '<ваш токен>'}' bash -";
 
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1e293b),
         title: Text(
-          ok
-              ? '$label установлен'
-              : 'Установка не удалась полностью',
+          ok ? '$label установлен' : 'Установка не удалась полностью',
           style: const TextStyle(color: Color(0xFFf1f5f9), fontSize: 18),
         ),
         content: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (gatewayNeedsUpdate) ...[
+                const Text(
+                  'Клиент уже обновлён, но gateway на сервере старый: у него нет нового endpoint-а установки агентов. Обновите gateway по SSH и нажмите кнопку установки агента ещё раз.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFFfde68a),
+                    height: 1.35,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0f172a),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF334155)),
+                  ),
+                  child: SelectableText(
+                    updateCommand,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: Color(0xFFe2e8f0),
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
               if (err.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
@@ -1204,6 +1235,18 @@ curl -fsSL $_kPlanulixInstallScript \\
           ),
         ),
         actions: [
+          if (gatewayNeedsUpdate)
+            TextButton(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: updateCommand));
+                if (ctx.mounted) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(content: Text('Команда обновления скопирована')),
+                  );
+                }
+              },
+              child: const Text('Копировать команду'),
+            ),
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('OK'),
