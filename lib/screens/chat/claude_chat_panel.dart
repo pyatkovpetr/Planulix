@@ -1886,6 +1886,52 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
     );
   }
 
+  Future<void> _copyMessageText(String text) async {
+    if (text.trim().isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('Скопировано в буфер'),
+        duration: Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _showMessageContextMenu(
+    Offset globalPosition,
+    String text,
+  ) async {
+    if (text.trim().isEmpty) return;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        globalPosition & const Size(1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: const [
+        PopupMenuItem<String>(
+          value: 'copy',
+          child: Row(
+            children: [
+              Icon(Icons.content_copy_rounded, size: 16),
+              SizedBox(width: 8),
+              Text('Copy message'),
+            ],
+          ),
+        ),
+      ],
+    );
+    if (selected == 'copy') {
+      await _copyMessageText(text);
+    }
+  }
+
   Widget _buildMessage(dynamic msg) {
     final type = (msg['type'] ?? msg['role'] ?? '').toString();
     final isUser = type == 'user';
@@ -1943,47 +1989,65 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
                   child: CircularProgressIndicator(strokeWidth: 1),
                 ),
               ],
-              if (text.isNotEmpty && !pending) ...[
-                const SizedBox(width: 4),
-                Tooltip(
-                  message: 'Копировать',
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(4),
-                    onTap: () async {
-                      final messenger = ScaffoldMessenger.of(context);
-                      await Clipboard.setData(ClipboardData(text: text));
-                      if (!mounted) return;
-                      messenger.showSnackBar(
-                        const SnackBar(
-                          content: Text('Скопировано в буфер'),
-                          duration: Duration(seconds: 2),
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    },
-                    child: const Padding(
-                      padding: EdgeInsets.all(4),
-                      child: Icon(
-                        Icons.content_copy_rounded,
-                        size: 12,
-                        color: Color(0xFF64748b),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
             ],
           ),
           const SizedBox(height: 3),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: isUser ? const Color(0xFF151e2e) : const Color(0xFF1e293b),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: const Color(0xFF1e2a3d)),
-            ),
-            child: SelectionArea(
-              child: _buildMessageBodySelectable(text.isEmpty ? '...' : text),
+          GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onSecondaryTapDown: text.isNotEmpty && !pending
+                ? (details) =>
+                      _showMessageContextMenu(details.globalPosition, text)
+                : null,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: isUser
+                    ? const Color(0xFF151e2e)
+                    : const Color(0xFF1e293b),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFF1e2a3d)),
+              ),
+              child: Stack(
+                children: [
+                  Padding(
+                    padding: EdgeInsets.only(
+                      right: text.isNotEmpty && !pending ? 28 : 0,
+                    ),
+                    child: SelectionArea(
+                      child: _buildMessageBodySelectable(
+                        text.isEmpty ? '...' : text,
+                      ),
+                    ),
+                  ),
+                  if (text.isNotEmpty && !pending)
+                    Positioned(
+                      top: 0,
+                      right: 0,
+                      child: Tooltip(
+                        message: 'Копировать ответ',
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(5),
+                          onTap: () => _copyMessageText(text),
+                          child: Container(
+                            padding: const EdgeInsets.all(5),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0f172a).withAlpha(190),
+                              borderRadius: BorderRadius.circular(5),
+                              border: Border.all(
+                                color: const Color(0xFF334155),
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.content_copy_rounded,
+                              size: 13,
+                              color: Color(0xFFcbd5e1),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ],

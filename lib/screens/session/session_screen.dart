@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../providers/app_state.dart';
 import '../../utils/chat_models.dart';
@@ -210,6 +211,81 @@ class _SessionScreenState extends State<SessionScreen> {
       final content = _extractContent(m['content']).trim();
       return type == candidateType && content == candidateContent;
     });
+  }
+
+  String _displayContent(String content, {required bool isUser}) {
+    if (isUser || _agentName != 'Codex') return content;
+    return _cleanCodexExecOutput(content);
+  }
+
+  String _cleanCodexExecOutput(String stdout) {
+    final normalized = stdout.trim().replaceAll('\r\n', '\n');
+    if (normalized.isEmpty) return normalized;
+    final lines = normalized.split('\n');
+    var start = -1;
+    for (var i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].trim().toLowerCase() == 'codex') {
+        start = i + 1;
+        break;
+      }
+    }
+    if (start < 0 || start >= lines.length) return normalized;
+
+    var end = lines.length;
+    for (var i = start; i < lines.length; i++) {
+      final t = lines[i].trim().toLowerCase();
+      if (t == 'tokens used' || (t == '--------' && i > start)) {
+        end = i;
+        break;
+      }
+    }
+
+    final answer = lines.sublist(start, end).join('\n').trim();
+    return answer.isEmpty ? normalized : answer;
+  }
+
+  Future<void> _copyMessage(String content) async {
+    final text = content.trim();
+    if (text.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('Скопировано в буфер'),
+        duration: Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _showMessageMenu(Offset globalPosition, String content) async {
+    if (content.trim().isEmpty) return;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        globalPosition & const Size(1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: const [
+        PopupMenuItem<String>(
+          value: 'copy',
+          child: Row(
+            children: [
+              Icon(Icons.content_copy_rounded, size: 16),
+              SizedBox(width: 8),
+              Text('Copy message'),
+            ],
+          ),
+        ),
+      ],
+    );
+    if (selected == 'copy') {
+      await _copyMessage(content);
+    }
   }
 
   Future<void> _pollSoonAfterSend() async {
@@ -659,7 +735,8 @@ class _SessionScreenState extends State<SessionScreen> {
     final type = msg['type'] ?? msg['role'] ?? '';
     final isUser = type == 'user';
     final isPending = msg['pending'] == true;
-    final content = _extractContent(msg['content']);
+    final rawContent = _extractContent(msg['content']);
+    final content = _displayContent(rawContent, isUser: isUser);
     final toolCalls = _extractToolCalls(msg['content']);
     final model = msg['model'] ?? '';
 
@@ -667,89 +744,135 @@ class _SessionScreenState extends State<SessionScreen> {
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.all(12),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.88,
-        ),
-        decoration: BoxDecoration(
-          color: isUser
-              ? const Color(0xFF8b5cf6).withAlpha(30)
-              : const Color(0xFF1e293b),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isPending
-                ? const Color(0xFF8b5cf6).withAlpha(30)
-                : isUser
-                ? const Color(0xFF8b5cf6).withAlpha(60)
-                : const Color(0xFF334155),
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onSecondaryTapDown: content.isNotEmpty && !isPending
+            ? (details) => _showMessageMenu(details.globalPosition, content)
+            : null,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.all(12),
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.88,
           ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  isUser ? Icons.person : Icons.smart_toy,
-                  size: 13,
-                  color: isUser
-                      ? const Color(0xFF8b5cf6)
-                      : const Color(0xFF22c55e),
-                ),
-                const SizedBox(width: 5),
-                Text(
-                  isUser ? 'You' : _agentName,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
+          decoration: BoxDecoration(
+            color: isUser
+                ? const Color(0xFF8b5cf6).withAlpha(30)
+                : const Color(0xFF1e293b),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isPending
+                  ? const Color(0xFF8b5cf6).withAlpha(30)
+                  : isUser
+                  ? const Color(0xFF8b5cf6).withAlpha(60)
+                  : const Color(0xFF334155),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    isUser ? Icons.person : Icons.smart_toy,
+                    size: 13,
                     color: isUser
                         ? const Color(0xFF8b5cf6)
                         : const Color(0xFF22c55e),
                   ),
-                ),
-                if (isPending) ...[
-                  const SizedBox(width: 6),
-                  const Text(
-                    'sending...',
+                  const SizedBox(width: 5),
+                  Text(
+                    isUser ? 'You' : _agentName,
                     style: TextStyle(
-                      fontSize: 9,
-                      color: Color(0xFF64748b),
-                      fontStyle: FontStyle.italic,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: isUser
+                          ? const Color(0xFF8b5cf6)
+                          : const Color(0xFF22c55e),
                     ),
                   ),
-                ],
-                const Spacer(),
-                if (model.isNotEmpty)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 5,
-                      vertical: 1,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0f172a),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      model,
-                      style: const TextStyle(
+                  if (isPending) ...[
+                    const SizedBox(width: 6),
+                    const Text(
+                      'sending...',
+                      style: TextStyle(
                         fontSize: 9,
                         color: Color(0xFF64748b),
+                        fontStyle: FontStyle.italic,
                       ),
                     ),
-                  ),
+                  ],
+                  const Spacer(),
+                  if (content.isNotEmpty && !isPending)
+                    Tooltip(
+                      message: 'Копировать сообщение',
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(5),
+                        onTap: () => _copyMessage(content),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF0f172a),
+                            borderRadius: BorderRadius.circular(5),
+                            border: Border.all(color: const Color(0xFF334155)),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.content_copy_rounded,
+                                size: 12,
+                                color: Color(0xFFcbd5e1),
+                              ),
+                              SizedBox(width: 4),
+                              Text(
+                                'Copy',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: Color(0xFFcbd5e1),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (model.isNotEmpty) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 1,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0f172a),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        model,
+                        style: const TextStyle(
+                          fontSize: 9,
+                          color: Color(0xFF64748b),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              if (toolCalls.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                ...toolCalls.map((t) => _toolCallChip(t)),
               ],
-            ),
-            if (toolCalls.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              ...toolCalls.map((t) => _toolCallChip(t)),
+              if (content.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                SelectionArea(child: _buildRichContent(content)),
+              ],
             ],
-            if (content.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              _buildRichContent(content),
-            ],
-          ],
+          ),
         ),
       ),
     );
@@ -822,7 +945,10 @@ class _SessionScreenState extends State<SessionScreen> {
   Widget _buildRichContent(String content) {
     final matches = _pathRegex.allMatches(content).toList();
     if (matches.isEmpty) {
-      return Text(content, style: const TextStyle(fontSize: 13, height: 1.5));
+      return SelectableText(
+        content,
+        style: const TextStyle(fontSize: 13, height: 1.5),
+      );
     }
 
     final widgets = <Widget>[];
@@ -832,7 +958,10 @@ class _SessionScreenState extends State<SessionScreen> {
         final text = content.substring(lastEnd, m.start);
         if (text.trim().isNotEmpty) {
           widgets.add(
-            Text(text, style: const TextStyle(fontSize: 13, height: 1.5)),
+            SelectableText(
+              text,
+              style: const TextStyle(fontSize: 13, height: 1.5),
+            ),
           );
         }
       }
@@ -844,7 +973,10 @@ class _SessionScreenState extends State<SessionScreen> {
       final text = content.substring(lastEnd);
       if (text.trim().isNotEmpty) {
         widgets.add(
-          Text(text, style: const TextStyle(fontSize: 13, height: 1.5)),
+          SelectableText(
+            text,
+            style: const TextStyle(fontSize: 13, height: 1.5),
+          ),
         );
       }
     }

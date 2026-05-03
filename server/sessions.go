@@ -805,8 +805,53 @@ func runAgentTaskSendResult(agent, cwd, text string, agentEnv map[string]string,
 			outStr = cleaned
 		}
 	}
+	if normalizeRequestedAgent(agent, model) == "codex-cli" {
+		if cleaned := codexCleanExecOutput(outStr); cleaned != "" {
+			outStr = cleaned
+		}
+	}
 	log.Printf("%s task send [%s] ok (bytes=%d)", agent, logCtx, len(outStr))
 	return outStr, nil
+}
+
+func codexCleanExecOutput(stdout string) string {
+	stdout = strings.TrimSpace(strings.ReplaceAll(stdout, "\r\n", "\n"))
+	if stdout == "" {
+		return ""
+	}
+	lines := strings.Split(stdout, "\n")
+
+	start := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.EqualFold(strings.TrimSpace(lines[i]), "codex") {
+			start = i + 1
+			break
+		}
+	}
+	if start < 0 || start >= len(lines) {
+		return stdout
+	}
+
+	end := len(lines)
+	for i := start; i < len(lines); i++ {
+		switch strings.ToLower(strings.TrimSpace(lines[i])) {
+		case "tokens used":
+			end = i
+		case "--------":
+			if i > start {
+				end = i
+			}
+		}
+		if end != len(lines) {
+			break
+		}
+	}
+
+	answer := strings.TrimSpace(strings.Join(lines[start:end], "\n"))
+	if answer == "" {
+		return stdout
+	}
+	return answer
 }
 
 func (s *SessionServer) planulixTranscriptPath(id string) string {

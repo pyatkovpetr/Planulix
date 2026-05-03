@@ -48,6 +48,9 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Local packaged release artifacts (upload to GitHub Releases, do not commit)
+/dist/
+
 # Local server build artifacts
 server/build/
 server/planulix
