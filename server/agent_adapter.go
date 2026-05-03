@@ -208,11 +208,10 @@ func agentTmuxPrefix(agent string) string {
 func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[string]string) (cmd string, env string, err error) {
 	switch normalizeRequestedAgent(agent, model) {
 	case "kimi-cli":
-		modelFlag := ""
-		if m := modelFlagValue(model); m != "" {
-			modelFlag = fmt.Sprintf(" -m %q", m)
-		}
-		base := fmt.Sprintf("%s -w %q -y%s", kimiBinDefault, cwd, modelFlag)
+		// Do not pass -m here. Kimi Code validates model names against the server-side
+		// ~/.kimi/config.toml; UI/provider ids frequently do not match local aliases and
+		// make a new chat die before it can be linked.
+		base := fmt.Sprintf("%s -w %q -y", kimiBinDefault, cwd)
 		env = mergeSessionExports(kimiEnvWithAuth(), shellExportsFromAgentEnv(agentEnv))
 		if mode == "task" {
 			if prompt == "" {

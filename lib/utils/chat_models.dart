@@ -24,29 +24,22 @@ class ChatModelChoice {
 
 const List<ChatModelChoice> kClaudeChatModels = [
   ChatModelChoice(
-    label: 'Sonnet 4',
-    id: 'claude-sonnet-4-20250514',
+    label: 'Sonnet',
+    id: 'sonnet',
     tier: 'Balanced',
     priceInPerM: 3.0,
     priceOutPerM: 15.0,
   ),
   ChatModelChoice(
-    label: 'Sonnet 4.5',
-    id: 'claude-sonnet-4-5-20250514',
-    tier: 'Balanced',
-    priceInPerM: 3.0,
-    priceOutPerM: 15.0,
-  ),
-  ChatModelChoice(
-    label: 'Opus 4',
-    id: 'claude-opus-4-20250514',
+    label: 'Opus',
+    id: 'opus',
     tier: 'Premium',
     priceInPerM: 15.0,
     priceOutPerM: 75.0,
   ),
   ChatModelChoice(
-    label: 'Haiku 4.5',
-    id: 'claude-haiku-4-5-20251001',
+    label: 'Haiku',
+    id: 'haiku',
     tier: 'Fast',
     priceInPerM: 1.0,
     priceOutPerM: 5.0,

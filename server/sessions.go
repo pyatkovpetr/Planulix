@@ -211,6 +211,38 @@ func countUserAssistant(messages []Message) (users, assistants int) {
 	return users, assistants
 }
 
+func messageContentText(content interface{}) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []interface{}:
+		var b strings.Builder
+		for _, item := range v {
+			switch x := item.(type) {
+			case string:
+				b.WriteString(x)
+			case map[string]interface{}:
+				if x["type"] == "text" {
+					if txt, ok := x["text"].(string); ok {
+						b.WriteString(txt)
+					}
+				}
+			}
+		}
+		return b.String()
+	default:
+		return ""
+	}
+}
+
+func titleFromContent(content interface{}) string {
+	t := strings.TrimSpace(messageContentText(content))
+	if len(t) > 80 {
+		t = t[:80] + "…"
+	}
+	return t
+}
+
 func isKimiAgent(agent, model string) bool {
 	a := strings.ToLower(strings.TrimSpace(agent))
 	m := strings.ToLower(strings.TrimSpace(model))
@@ -386,6 +418,11 @@ func (s *SessionServer) GetSession(c *gin.Context) {
 
 	if isManaged && title == "" {
 		title = ts.Name
+	}
+	if !isManaged && title == "" && s.agentStore != nil {
+		if rec := s.agentStore.Get(id); rec != nil {
+			title = rec.Name
+		}
 	}
 	if st := s.tags.Get(id); st.Title != "" {
 		title = st.Title
@@ -748,35 +785,124 @@ func runAgentTaskSendResult(agent, cwd, text string, agentEnv map[string]string,
 	return outStr, nil
 }
 
+func (s *SessionServer) planulixTranscriptPath(id string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		home = "."
+	}
+	return filepath.Join(home, ".planulix", "transcripts", id+".jsonl")
+}
+
+func appendPlanulixTranscript(path, userText, assistantText, model string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("empty transcript path")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	writeMsg := func(role, content string) error {
+		if strings.TrimSpace(content) == "" {
+			return nil
+		}
+		line, err := json.Marshal(map[string]interface{}{
+			"type": role,
+			"message": map[string]interface{}{
+				"role":    role,
+				"content": content,
+				"model":   model,
+			},
+			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write(append(line, '\n')); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := writeMsg("user", userText); err != nil {
+		return err
+	}
+	return writeMsg("assistant", assistantText)
+}
+
+func (s *SessionServer) appendManagedLocalTranscript(ts *TmuxSession, userText, assistantText, model string) {
+	if ts == nil {
+		return
+	}
+	if strings.TrimSpace(ts.HistoryPath) == "" || !strings.Contains(ts.HistoryPath, ".planulix") {
+		ts.HistoryPath = s.planulixTranscriptPath(ts.ID)
+	}
+	if err := appendPlanulixTranscript(ts.HistoryPath, userText, assistantText, model); err != nil {
+		log.Printf("append local transcript for %s failed: %v", ts.ID, err)
+		return
+	}
+	s.persistManaged(ts)
+}
+
+func (s *SessionServer) appendStoredLocalTranscript(rec *StoredAgentSession, userText, assistantText, model string) {
+	if s.agentStore == nil || rec == nil {
+		return
+	}
+	if strings.TrimSpace(rec.HistoryPath) == "" || !strings.Contains(rec.HistoryPath, ".planulix") {
+		rec.HistoryPath = s.planulixTranscriptPath(rec.ID)
+	}
+	if err := appendPlanulixTranscript(rec.HistoryPath, userText, assistantText, model); err != nil {
+		log.Printf("append stored transcript for %s failed: %v", rec.ID, err)
+		return
+	}
+	rec.Status = "running"
+	_ = s.agentStore.Upsert(rec)
+}
+
 // linkKimiSession watches ~/.kimi/sessions/<workdir-hash>/ for a new session dir with context.jsonl.
 func (s *SessionServer) linkKimiSession(managedID, tmuxName, cwd string) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return
 	}
-	cwdMap := loadKimiSessionDirToCwd(home)
-	var keys []string
-	for k, p := range cwdMap {
-		if p == cwd {
-			keys = append(keys, k)
-		}
-	}
-	if len(keys) == 0 {
-		return
-	}
 	existing := make(map[string]bool)
-	for _, key := range keys {
+	startedCutoff := time.Now().Add(-5 * time.Second)
+	keysSeen := make(map[string]bool)
+	keysForCwd := func() []string {
+		cwdMap := loadKimiSessionDirToCwd(home)
+		var keys []string
+		for k, p := range cwdMap {
+			if p == cwd {
+				keys = append(keys, k)
+			}
+		}
+		return keys
+	}
+	primeExisting := func(key string) {
+		if keysSeen[key] {
+			return
+		}
+		keysSeen[key] = true
 		root := filepath.Join(home, ".kimi", "sessions", key)
 		entries, _ := os.ReadDir(root)
 		for _, e := range entries {
-			if e.IsDir() {
+			if !e.IsDir() {
+				continue
+			}
+			ctxPath := filepath.Join(root, e.Name(), "context.jsonl")
+			st, err := os.Stat(ctxPath)
+			if err == nil && !st.IsDir() && st.ModTime().Before(startedCutoff) {
 				existing[key+"/"+e.Name()] = true
 			}
 		}
 	}
 	for i := 0; i < 45; i++ {
 		time.Sleep(1 * time.Second)
+		keys := keysForCwd()
 		for _, key := range keys {
+			primeExisting(key)
 			root := filepath.Join(home, ".kimi", "sessions", key)
 			entries, err := os.ReadDir(root)
 			if err != nil {
@@ -942,6 +1068,9 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 				c.JSON(502, gin.H{"error": err.Error()})
 				return
 			}
+			if rec != nil && strings.HasPrefix(id, "cd-") {
+				s.appendStoredLocalTranscript(rec, req.Text, answer, req.Model)
+			}
 			c.JSON(200, gin.H{"ok": true, "assistant": answer})
 			return
 		}
@@ -993,7 +1122,26 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 
 	// Kimi (managed, linked): interactive tmux often misses multi-byte / pasted input via send-keys.
 	// Use the same one-shot API as the unlinked path — updates context.jsonl Kimi already uses.
-	if managedAgent == "kimi-cli" && strings.TrimSpace(ts.KimiSession) != "" {
+	if managedAgent == "kimi-cli" {
+		if strings.TrimSpace(ts.KimiSession) == "" {
+			for i := 0; i < 30; i++ {
+				time.Sleep(500 * time.Millisecond)
+				s.mu.RLock()
+				linked := ""
+				if latest, exists := s.tmuxSessions[id]; exists && latest != nil {
+					linked = strings.TrimSpace(latest.KimiSession)
+				}
+				s.mu.RUnlock()
+				if linked != "" {
+					ts.KimiSession = linked
+					break
+				}
+			}
+		}
+		if strings.TrimSpace(ts.KimiSession) == "" {
+			c.JSON(409, gin.H{"error": "kimi session not linked yet; wait a few seconds and retry"})
+			return
+		}
 		uuid := kimiAPIID(ts.KimiSession)
 		cwd := ts.Cwd
 		if cwd == "" {
@@ -1028,6 +1176,7 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 			c.JSON(502, gin.H{"error": err.Error()})
 			return
 		}
+		s.appendManagedLocalTranscript(ts, req.Text, answer, model)
 		c.JSON(200, gin.H{"ok": true, "assistant": answer})
 		return
 	}
@@ -1049,11 +1198,7 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 			}
 		}
 		if strings.TrimSpace(ts.ClaudeSession) == "" {
-			if err := sendLiteralToTmux(ts.Name, req.Text); err != nil {
-				c.JSON(500, gin.H{"error": fmt.Sprintf("failed to send: %v", err)})
-				return
-			}
-			c.JSON(200, gin.H{"ok": true, "pendingLink": true})
+			c.JSON(409, gin.H{"error": "claude session not linked yet; wait a few seconds and retry"})
 			return
 		}
 		cwd := ts.Cwd
@@ -1476,6 +1621,33 @@ func (s *SessionServer) parseJSONL(path string) ([]Message, string) {
 				msg.Timestamp = ts
 			}
 			msg.SessionID, _ = raw["sessionId"].(string)
+			messages = append(messages, msg)
+		default:
+			// Cursor agent transcripts and Planulix local transcripts use a simpler
+			// `{role,message}` shape instead of Claude Code's `{type,message}` envelope.
+			role, _ := raw["role"].(string)
+			if role != "user" && role != "assistant" {
+				continue
+			}
+			msg := Message{Type: role, Role: role}
+			if msgObj, ok := raw["message"].(map[string]interface{}); ok {
+				if r, ok := msgObj["role"].(string); ok && r != "" {
+					msg.Role = r
+				}
+				if content, ok := msgObj["content"]; ok {
+					msg.Content = content
+				}
+				msg.Model, _ = msgObj["model"].(string)
+			} else if content, ok := raw["content"]; ok {
+				msg.Content = content
+			}
+			if ts, ok := raw["timestamp"].(string); ok {
+				msg.Timestamp = ts
+			}
+			msg.SessionID, _ = raw["sessionId"].(string)
+			if title == "" && role == "user" {
+				title = titleFromContent(msg.Content)
+			}
 			messages = append(messages, msg)
 		}
 	}

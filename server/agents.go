@@ -324,6 +324,25 @@ func (s *SessionServer) parseAgentJSONLHeader(path string) (string, int) {
 		}
 		if typ == "user" || typ == "assistant" || typ == "message" {
 			count++
+			if title == "" && typ == "user" {
+				if msgObj, ok := raw["message"].(map[string]interface{}); ok {
+					title = titleFromContent(msgObj["content"])
+				} else {
+					title = titleFromContent(raw["content"])
+				}
+			}
+			continue
+		}
+		role, _ := raw["role"].(string)
+		if role == "user" || role == "assistant" {
+			count++
+			if title == "" && role == "user" {
+				if msgObj, ok := raw["message"].(map[string]interface{}); ok {
+					title = titleFromContent(msgObj["content"])
+				} else {
+					title = titleFromContent(raw["content"])
+				}
+			}
 		}
 	}
 

@@ -31,10 +31,9 @@ type CapabilityAgent struct {
 }
 
 var claudeCapabilityModels = []CapabilityModel{
-	{Label: "Sonnet 4", ID: "claude-sonnet-4-20250514", Tier: "Balanced", PriceInPerM: 3.0, PriceOutPerM: 15.0},
-	{Label: "Sonnet 4.5", ID: "claude-sonnet-4-5-20250514", Tier: "Balanced", PriceInPerM: 3.0, PriceOutPerM: 15.0},
-	{Label: "Opus 4", ID: "claude-opus-4-20250514", Tier: "Premium", PriceInPerM: 15.0, PriceOutPerM: 75.0},
-	{Label: "Haiku 4.5", ID: "claude-haiku-4-5-20251001", Tier: "Fast", PriceInPerM: 1.0, PriceOutPerM: 5.0},
+	{Label: "Sonnet", ID: "sonnet", Tier: "Balanced", PriceInPerM: 3.0, PriceOutPerM: 15.0},
+	{Label: "Opus", ID: "opus", Tier: "Premium", PriceInPerM: 15.0, PriceOutPerM: 75.0},
+	{Label: "Haiku", ID: "haiku", Tier: "Fast", PriceInPerM: 1.0, PriceOutPerM: 5.0},
 }
 
 var kimiCapabilityModels = []CapabilityModel{

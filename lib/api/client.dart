@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -46,6 +48,14 @@ class ApiClient {
     }
     if (status != null) return 'HTTP $status $uri';
     return e.message ?? e.toString();
+  }
+
+  bool _isSessionLinkRetryable(DioException e) {
+    if (e.response?.statusCode != 409) return false;
+    final msg = _dioErrorMessage(e).toLowerCase();
+    return msg.contains('not linked yet') ||
+        msg.contains('pending link') ||
+        msg.contains('session not linked');
   }
 
   /// Единый базовый URL для Dio и геттера [baseUrl] (prefs + dart-define).
@@ -190,18 +200,28 @@ class ApiClient {
     String text, {
     Map<String, String>? agentEnv,
     String? model,
+    int linkRetryAttempts = 30,
   }) async {
     final body = <String, dynamic>{
       'text': text,
       if (model != null && model.trim().isNotEmpty) 'model': model.trim(),
       if (agentEnv != null && agentEnv.isNotEmpty) 'agentEnv': agentEnv,
     };
-    try {
-      final res = await _dio.post('/sessions/$sessionId/message', data: body);
-      return Map<String, dynamic>.from(res.data as Map? ?? {});
-    } on DioException catch (e) {
-      throw Exception(_dioErrorMessage(e));
+    for (var attempt = 0; attempt <= linkRetryAttempts; attempt++) {
+      try {
+        final res = await _dio.post('/sessions/$sessionId/message', data: body);
+        return Map<String, dynamic>.from(res.data as Map? ?? {});
+      } on DioException catch (e) {
+        if (_isSessionLinkRetryable(e) && attempt < linkRetryAttempts) {
+          await Future.delayed(
+            Duration(milliseconds: attempt < 6 ? 500 : 1000),
+          );
+          continue;
+        }
+        throw Exception(_dioErrorMessage(e));
+      }
     }
+    throw StateError('unreachable sendMessage retry loop');
   }
 
   Future<void> stopSession(String sessionId) async {
