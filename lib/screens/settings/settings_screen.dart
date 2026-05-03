@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -1541,95 +1540,33 @@ curl -fsSL $_kPlanulixInstallScript \\
     return raw;
   }
 
-  String _oauthCallbackHtml({
-    required String code,
-    required String callbackUrl,
-    required bool submitted,
-    required Object? submitError,
-  }) {
-    const esc = HtmlEscape();
-    final escapedCode = esc.convert(code);
-    final escapedUrl = esc.convert(callbackUrl);
-    final escapedError = submitError == null ? '' : esc.convert('$submitError');
-    final title = submitted
-        ? 'Planulix: OAuth code sent'
-        : 'Planulix: copy this OAuth code';
-    final body = submitted
-        ? 'The code was sent to the CLI. You can close this tab and return to Planulix.'
-        : submitError == null
-        ? 'Copy the code below and paste it into the field in Planulix, then click "Send code to CLI". Use each code only once.'
-        : 'Automatic submit failed. Copy the code below and paste it into the field in Planulix. If that still fails with 404, deploy the updated gateway first.';
-
-    return '''
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>$title</title>
-    <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 40px; line-height: 1.45; color: #111827; }
-      code, textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-      textarea { width: min(920px, 100%); height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 10px; font-size: 13px; }
-      button { margin-top: 12px; padding: 10px 14px; border: 0; border-radius: 8px; background: #4f46e5; color: white; cursor: pointer; }
-      .muted { color: #6b7280; }
-      .error { margin-top: 20px; padding: 12px; border-radius: 10px; background: #fee2e2; color: #991b1b; white-space: pre-wrap; }
-    </style>
-  </head>
-  <body>
-    <h2>$title</h2>
-    <p>$body</p>
-    <textarea id="code" readonly>$escapedCode</textarea><br>
-    <button onclick="navigator.clipboard.writeText(document.getElementById('code').value).then(() => this.textContent = 'Copied')">Copy code</button>
-    <p class="muted">Callback URL: <code>$escapedUrl</code></p>
-    ${submitError == null ? '' : '<div class="error">$escapedError</div>'}
-  </body>
-</html>
-''';
-  }
-
-  Future<HttpServer?> _startLocalOAuthCallbackListener({
-    required String agentId,
-    required String authUrl,
+  Future<int?> _startRemoteOAuthCallbackForward({
+    required BuildContext context,
+    required Uri redirect,
     required void Function(String line) onLog,
   }) async {
-    final redirect = _authRedirectUri(authUrl);
-    if (redirect == null) return null;
-    try {
-      final server = await HttpServer.bind(
-        InternetAddress.loopbackIPv4,
-        redirect.port,
-        shared: true,
-      );
+    final target = context.read<AppState>().gatewayVpsTunnelTarget;
+    if (target == null) {
       onLog(
-        '[planulix] Waiting for local OAuth callback on http://localhost:${redirect.port}${redirect.path}',
+        '[planulix] SSH target is not configured; cannot forward OAuth callback.',
       );
-      unawaited(() async {
-        await for (final req in server) {
-          final callbackUrl = req.requestedUri.toString();
-          final code = req.uri.queryParameters['code'] ?? '';
-          req.response.statusCode = 200;
-          req.response.headers.contentType = ContentType.html;
-          req.response.write(
-            _oauthCallbackHtml(
-              code: code,
-              callbackUrl: callbackUrl,
-              submitted: false,
-              submitError: null,
-            ),
-          );
-          onLog(
-            '[planulix] OAuth callback captured. Copy the code from browser and send it once.',
-          );
-          await req.response.close();
-          await server.close(force: true);
-          break;
-        }
-      }());
-      return server;
-    } catch (e) {
-      onLog('[planulix] Could not listen on localhost:${redirect.port}: $e');
       return null;
     }
+    final err = await SshVpsSocksTunnel.ensureLocalForward(
+      host: target.host,
+      sshUser: target.sshUser,
+      sshPort: target.sshPort,
+      localPort: redirect.port,
+      remotePort: redirect.port,
+    );
+    if (err != null) {
+      onLog('[planulix] OAuth callback SSH forward failed: $err');
+      return null;
+    }
+    onLog(
+      '[planulix] Forwarding OAuth callback localhost:${redirect.port} -> VPS localhost:${redirect.port}',
+    );
+    return redirect.port;
   }
 
   Future<void> _submitManualAuthCode({
@@ -1693,7 +1630,7 @@ curl -fsSL $_kPlanulixInstallScript \\
     var authDone = false;
     var logTail = 'Ожидаю URL от $label CLI...';
     Timer? timer;
-    HttpServer? localCallbackServer;
+    int? forwardedCallbackPort;
     final manualCodeController = TextEditingController();
 
     await showDialog<void>(
@@ -1726,16 +1663,24 @@ curl -fsSL $_kPlanulixInstallScript \\
               if (urls.isNotEmpty && openedUrl != urls.last) {
                 openedUrl = urls.last;
                 if (ctx.mounted) {
-                  await localCallbackServer?.close(force: true);
-                  localCallbackServer = await _startLocalOAuthCallbackListener(
-                    agentId: agentId,
-                    authUrl: openedUrl,
-                    onLog: (line) {
-                      if (ctx.mounted) {
-                        setDialogState(() => logTail = '$logTail\n$line');
-                      }
-                    },
-                  );
+                  final oldForward = forwardedCallbackPort;
+                  if (oldForward != null) {
+                    SshVpsSocksTunnel.stopLocalForward(oldForward);
+                    forwardedCallbackPort = null;
+                  }
+                  final redirect = _authRedirectUri(openedUrl);
+                  if (redirect != null) {
+                    forwardedCallbackPort =
+                        await _startRemoteOAuthCallbackForward(
+                          context: ctx,
+                          redirect: redirect,
+                          onLog: (line) {
+                            if (ctx.mounted) {
+                              setDialogState(() => logTail = '$logTail\n$line');
+                            }
+                          },
+                        );
+                  }
                   if (!ctx.mounted) return;
                   await _openAuthUrlViaSocks(ctx, openedUrl);
                 }
@@ -1761,7 +1706,7 @@ curl -fsSL $_kPlanulixInstallScript \\
                   Text(
                     authDone
                         ? 'CLI уже авторизован. Можно создавать новые чаты.'
-                        : 'Planulix запустил login на VPS. Chrome откроется через SSH SOCKS5, а callback localhost будет перехвачен этим приложением и code уйдёт обратно в CLI.',
+                        : 'Planulix запустил login на VPS. Chrome откроется через SSH SOCKS5, а localhost callback будет проброшен на Claude CLI через SSH.',
                     style: TextStyle(
                       fontSize: 12,
                       height: 1.35,
@@ -1790,7 +1735,7 @@ curl -fsSL $_kPlanulixInstallScript \\
                     ),
                     decoration: InputDecoration(
                       hintText:
-                          'Если Chrome показал localhost error, вставьте сюда весь callback URL или code=...',
+                          'Fallback: вставьте manual code со страницы Claude, если браузер не завершил вход автоматически',
                       hintStyle: const TextStyle(
                         fontSize: 11,
                         color: Color(0xFF64748b),
@@ -1867,7 +1812,10 @@ curl -fsSL $_kPlanulixInstallScript \\
 
     timer?.cancel();
     manualCodeController.dispose();
-    await localCallbackServer?.close(force: true);
+    final oldForward = forwardedCallbackPort;
+    if (oldForward != null) {
+      SshVpsSocksTunnel.stopLocalForward(oldForward);
+    }
     try {
       await state.api.setupAgentAuthStop(agentId);
     } catch (_) {}

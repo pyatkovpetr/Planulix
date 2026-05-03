@@ -270,13 +270,17 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 		}
 		env = claudeExportsForShell(agentEnv)
 		q := strconv.Quote(clBin)
+		permissionFlag := " --dangerously-skip-permissions"
+		if os.Geteuid() == 0 {
+			permissionFlag = ""
+		}
 		if mode == "task" {
 			if prompt == "" {
 				return "", "", fmt.Errorf("prompt is required for task mode")
 			}
-			return fmt.Sprintf("%s --dangerously-skip-permissions%s -p %q", q, modelFlag, prompt), env, nil
+			return fmt.Sprintf("%s%s%s -p %q", q, permissionFlag, modelFlag, prompt), env, nil
 		}
-		return fmt.Sprintf("%s --dangerously-skip-permissions%s", q, modelFlag), env, nil
+		return fmt.Sprintf("%s%s%s", q, permissionFlag, modelFlag), env, nil
 	}
 }
 
@@ -291,10 +295,14 @@ func buildClaudeResumeShell(cwd, claudeSessionID, text string, agentEnv map[stri
 	if m := strings.TrimSpace(model); m != "" {
 		modelFlag = " --model " + m
 	}
+	permissionFlag := " --dangerously-skip-permissions"
+	if os.Geteuid() == 0 {
+		permissionFlag = ""
+	}
 	q := strconv.Quote(clBin)
 	return fmt.Sprintf(
-		"%s && cd %q && %s --dangerously-skip-permissions%s --resume %s -p %q",
-		env, cwd, q, modelFlag, claudeSessionID, text,
+		"%s && cd %q && %s%s%s --resume %s -p %q",
+		env, cwd, q, permissionFlag, modelFlag, claudeSessionID, text,
 	)
 }
 

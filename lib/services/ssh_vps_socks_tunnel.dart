@@ -7,6 +7,7 @@ class SshVpsSocksTunnel {
   SshVpsSocksTunnel._();
   static Process? _socks;
   static bool _live = false;
+  static final Map<int, Process> _localForwards = {};
 
   static const socksPort = 1080;
 
@@ -65,6 +66,57 @@ class SshVpsSocksTunnel {
     }
   }
 
+  /// Forward a local callback port on this machine to the same localhost port
+  /// on the VPS. Claude Code OAuth uses `redirect_uri=http://localhost:<port>`;
+  /// the browser is local, but the CLI callback server is on the VPS.
+  static Future<String?> ensureLocalForward({
+    required String host,
+    required String sshUser,
+    int sshPort = 22,
+    required int localPort,
+    int? remotePort,
+  }) async {
+    final existing = _localForwards[localPort];
+    if (existing != null) return null;
+
+    try {
+      final exe = Platform.isWindows ? 'ssh.exe' : 'ssh';
+      final p = await Process.start(exe, [
+        '-p',
+        '$sshPort',
+        '-L',
+        '127.0.0.1:$localPort:127.0.0.1:${remotePort ?? localPort}',
+        '-N',
+        '-o',
+        'StrictHostKeyChecking=no',
+        '-o',
+        'ServerAliveInterval=30',
+        '-o',
+        'ExitOnForwardFailure=yes',
+        '$sshUser@$host',
+      ]);
+      _localForwards[localPort] = p;
+      p.exitCode.then((_) {
+        if (identical(_localForwards[localPort], p)) {
+          _localForwards.remove(localPort);
+        }
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      return null;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  static void stopLocalForward(int localPort) {
+    final p = _localForwards.remove(localPort);
+    if (p != null) {
+      try {
+        p.kill();
+      } catch (_) {}
+    }
+  }
+
   /// Если Chrome не доступен — обычное открытие (без гарантии IP VPS).
   static Future<void> openUrlFallbackBrowser(String url) async {
     final uri = Uri.tryParse(url.trim());
@@ -81,5 +133,11 @@ class SshVpsSocksTunnel {
     }
     _socks = null;
     _live = false;
+    for (final p in _localForwards.values) {
+      try {
+        p.kill();
+      } catch (_) {}
+    }
+    _localForwards.clear();
   }
 }
