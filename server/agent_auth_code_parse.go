@@ -17,7 +17,8 @@ func oauthQueryLike(s string) string {
 	return s
 }
 
-func oauthCodeFromPairs(q string) string {
+func oauthQueryValue(q, wantKey string) string {
+	wantKey = strings.TrimSpace(wantKey)
 	q = strings.TrimSpace(q)
 	for _, part := range strings.Split(q, "&") {
 		part = strings.TrimSpace(part)
@@ -28,20 +29,28 @@ func oauthCodeFromPairs(q string) string {
 		if !ok {
 			continue
 		}
-		if strings.TrimSpace(k) != "code" {
+		if strings.TrimSpace(k) != wantKey {
 			continue
 		}
 		v = strings.TrimSpace(v)
 		if v == "" {
 			continue
 		}
-		decoded, err := url.PathUnescape(v)
+		decoded, err := url.QueryUnescape(v)
 		if err != nil || strings.TrimSpace(decoded) == "" {
 			return v
 		}
 		return strings.TrimSpace(decoded)
 	}
 	return ""
+}
+
+func oauthCodeFromPairs(q string) string {
+	return oauthQueryValue(q, "code")
+}
+
+func oauthIDTokenFromPairs(q string) string {
+	return oauthQueryValue(q, "id_token")
 }
 
 func oauthPlainCodeAmpersandState(s string) string {
@@ -72,10 +81,16 @@ func extractOAuthCodeFromPaste(s string) string {
 		if v := oauthCodeFromPairs(u.RawQuery); v != "" {
 			return v
 		}
+		if v := oauthIDTokenFromPairs(u.RawQuery); v != "" {
+			return v
+		}
 	}
 
 	qblob := oauthQueryLike(s)
 	if qb := oauthCodeFromPairs(qblob); qb != "" {
+		return qb
+	}
+	if qb := oauthIDTokenFromPairs(qblob); qb != "" {
 		return qb
 	}
 

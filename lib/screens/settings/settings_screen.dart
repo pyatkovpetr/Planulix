@@ -1623,7 +1623,7 @@ curl -fsSL $_kPlanulixInstallScript \\
     var raw = raw0.trim().replaceAll(RegExp(r'[\r\n]+'), '');
     if (raw.isEmpty) return '';
 
-    String? fromPairs(String blob) {
+    String? queryParam(String blob, String wantKey) {
       if (blob.trim().isEmpty) return null;
       for (final part in blob.split('&')) {
         final segment = part.trim();
@@ -1631,10 +1631,10 @@ curl -fsSL $_kPlanulixInstallScript \\
         final eq = segment.indexOf('=');
         if (eq <= 0) continue;
         final k = segment.substring(0, eq).trim();
-        if (k != 'code') continue;
+        if (k != wantKey) continue;
         final v = segment.substring(eq + 1);
         try {
-          return Uri.decodeComponent(v).trim();
+          return Uri.decodeQueryComponent(v).trim();
         } catch (_) {
           return v.trim();
         }
@@ -1671,13 +1671,17 @@ curl -fsSL $_kPlanulixInstallScript \\
           uri.hasScheme &&
           t.contains('://') &&
           uri.query.isNotEmpty) {
-        final c = fromPairs(uri.query);
-        if (c != null && c.isNotEmpty) return c;
+        for (final key in ['code', 'id_token']) {
+          final c = queryParam(uri.query, key);
+          if (c != null && c.isNotEmpty) return c;
+        }
       }
 
       final qb = queryLike(t);
-      final qp = fromPairs(qb);
-      if (qp != null && qp.isNotEmpty) return qp;
+      for (final key in ['code', 'id_token']) {
+        final qp = queryParam(qb, key);
+        if (qp != null && qp.isNotEmpty) return qp;
+      }
 
       final loose = plainCodeAmpersandState(qb);
       if (loose != null && loose.isNotEmpty) return loose;
