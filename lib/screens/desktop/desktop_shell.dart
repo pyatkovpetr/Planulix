@@ -16,7 +16,6 @@ import '../explorer/project_picker.dart';
 import '../explorer/command_palette.dart';
 import '../explorer/terminal_panel.dart';
 import '../chat/claude_chat_panel.dart';
-import '../../utils/chat_models.dart';
 import '../../widgets/resizable_divider.dart';
 import '../onboarding/agent_welcome_screen.dart';
 import '../onboarding/connection_welcome_screen.dart';
@@ -35,7 +34,12 @@ class OpenTab {
   final TabType type;
   final String label;
   final String? cwd; // for file/diff
-  const OpenTab({required this.id, required this.type, required this.label, this.cwd});
+  const OpenTab({
+    required this.id,
+    required this.type,
+    required this.label,
+    this.cwd,
+  });
 }
 
 class _DesktopShellState extends State<DesktopShell> {
@@ -102,7 +106,9 @@ class _DesktopShellState extends State<DesktopShell> {
     setState(() {
       _activeTabId = tabId;
       if (!_openTabs.any((t) => t.id == tabId)) {
-        _openTabs.add(OpenTab(id: tabId, type: TabType.file, label: name, cwd: cwd));
+        _openTabs.add(
+          OpenTab(id: tabId, type: TabType.file, label: name, cwd: cwd),
+        );
       }
     });
   }
@@ -113,7 +119,9 @@ class _DesktopShellState extends State<DesktopShell> {
     setState(() {
       _activeTabId = tabId;
       if (!_openTabs.any((t) => t.id == tabId)) {
-        _openTabs.add(OpenTab(id: tabId, type: TabType.diff, label: 'Δ $name', cwd: cwd));
+        _openTabs.add(
+          OpenTab(id: tabId, type: TabType.diff, label: 'Δ $name', cwd: cwd),
+        );
       }
     });
   }
@@ -121,15 +129,25 @@ class _DesktopShellState extends State<DesktopShell> {
   void _openTerminal([String? cwd]) {
     final terminalCwd = cwd ?? _projectPath ?? '/home/claude';
     final tabId = 'terminal:${DateTime.now().millisecondsSinceEpoch}';
-    final name = terminalCwd.split('/').where((s) => s.isNotEmpty).lastOrNull ?? 'shell';
+    final name =
+        terminalCwd.split('/').where((s) => s.isNotEmpty).lastOrNull ?? 'shell';
     setState(() {
       _activeTabId = tabId;
-      _openTabs.add(OpenTab(id: tabId, type: TabType.terminal, label: '\$ $name', cwd: terminalCwd));
+      _openTabs.add(
+        OpenTab(
+          id: tabId,
+          type: TabType.terminal,
+          label: '\$ $name',
+          cwd: terminalCwd,
+        ),
+      );
     });
   }
 
   void _openCommandPalette(PaletteMode mode) {
-    final commands = mode == PaletteMode.commands ? _buildCommands() : <PaletteAction>[];
+    final commands = mode == PaletteMode.commands
+        ? _buildCommands()
+        : <PaletteAction>[];
     showDialog(
       context: context,
       barrierColor: const Color(0x88000000),
@@ -185,7 +203,8 @@ class _DesktopShellState extends State<DesktopShell> {
         label: 'Refresh Sessions',
         icon: Icons.refresh,
         shortcut: '⌘R',
-        onInvoke: () => context.read<AppState>().refreshSessions(refetchCosts: true),
+        onInvoke: () =>
+            context.read<AppState>().refreshSessions(refetchCosts: true),
       ),
     ];
   }
@@ -201,12 +220,20 @@ class _DesktopShellState extends State<DesktopShell> {
     });
   }
 
-  Future<void> _confirmRemoveSession(BuildContext context, AppState state, String sessionId, String label) async {
+  Future<void> _confirmRemoveSession(
+    BuildContext context,
+    AppState state,
+    String sessionId,
+    String label,
+  ) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1e293b),
-        title: const Text('Remove session?', style: TextStyle(color: Color(0xFFe2e8f0), fontSize: 16)),
+        title: const Text(
+          'Remove session?',
+          style: TextStyle(color: Color(0xFFe2e8f0), fontSize: 16),
+        ),
         content: Text(
           '«$label» will be removed from the list. Server-side history files are kept.',
           style: const TextStyle(color: Color(0xFF94a3b8), fontSize: 13),
@@ -214,11 +241,17 @@ class _DesktopShellState extends State<DesktopShell> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel', style: TextStyle(color: Color(0xFF94a3b8))),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: Color(0xFF94a3b8)),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Remove', style: TextStyle(color: Color(0xFFef4444))),
+            child: const Text(
+              'Remove',
+              style: TextStyle(color: Color(0xFFef4444)),
+            ),
           ),
         ],
       ),
@@ -262,39 +295,71 @@ class _DesktopShellState extends State<DesktopShell> {
 
     return Shortcuts(
       shortcuts: <ShortcutActivator, Intent>{
-        LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.keyP): const _OpenFilePickerIntent(),
-        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyP): const _OpenFilePickerIntent(),
-        LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.shift, LogicalKeyboardKey.keyP): const _OpenCommandPaletteIntent(),
-        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.shift, LogicalKeyboardKey.keyP): const _OpenCommandPaletteIntent(),
-        LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.shift, LogicalKeyboardKey.keyF): const _FindInFilesIntent(),
-        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.shift, LogicalKeyboardKey.keyF): const _FindInFilesIntent(),
-        LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.backquote): const _OpenTerminalIntent(),
-        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.backquote): const _OpenTerminalIntent(),
-        LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.keyL): const _ToggleChatIntent(),
-        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyL): const _ToggleChatIntent(),
+        LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.keyP):
+            const _OpenFilePickerIntent(),
+        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyP):
+            const _OpenFilePickerIntent(),
+        LogicalKeySet(
+          LogicalKeyboardKey.meta,
+          LogicalKeyboardKey.shift,
+          LogicalKeyboardKey.keyP,
+        ): const _OpenCommandPaletteIntent(),
+        LogicalKeySet(
+          LogicalKeyboardKey.control,
+          LogicalKeyboardKey.shift,
+          LogicalKeyboardKey.keyP,
+        ): const _OpenCommandPaletteIntent(),
+        LogicalKeySet(
+          LogicalKeyboardKey.meta,
+          LogicalKeyboardKey.shift,
+          LogicalKeyboardKey.keyF,
+        ): const _FindInFilesIntent(),
+        LogicalKeySet(
+          LogicalKeyboardKey.control,
+          LogicalKeyboardKey.shift,
+          LogicalKeyboardKey.keyF,
+        ): const _FindInFilesIntent(),
+        LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.backquote):
+            const _OpenTerminalIntent(),
+        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.backquote):
+            const _OpenTerminalIntent(),
+        LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.keyL):
+            const _ToggleChatIntent(),
+        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyL):
+            const _ToggleChatIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
-          _OpenFilePickerIntent: CallbackAction<_OpenFilePickerIntent>(onInvoke: (_) {
-            _openCommandPalette(PaletteMode.files);
-            return null;
-          }),
-          _OpenCommandPaletteIntent: CallbackAction<_OpenCommandPaletteIntent>(onInvoke: (_) {
-            _openCommandPalette(PaletteMode.commands);
-            return null;
-          }),
-          _FindInFilesIntent: CallbackAction<_FindInFilesIntent>(onInvoke: (_) {
-            _openCommandPalette(PaletteMode.findInFiles);
-            return null;
-          }),
-          _OpenTerminalIntent: CallbackAction<_OpenTerminalIntent>(onInvoke: (_) {
-            _openTerminal();
-            return null;
-          }),
-          _ToggleChatIntent: CallbackAction<_ToggleChatIntent>(onInvoke: (_) {
-            setState(() => _chatPanelOpen = !_chatPanelOpen);
-            return null;
-          }),
+          _OpenFilePickerIntent: CallbackAction<_OpenFilePickerIntent>(
+            onInvoke: (_) {
+              _openCommandPalette(PaletteMode.files);
+              return null;
+            },
+          ),
+          _OpenCommandPaletteIntent: CallbackAction<_OpenCommandPaletteIntent>(
+            onInvoke: (_) {
+              _openCommandPalette(PaletteMode.commands);
+              return null;
+            },
+          ),
+          _FindInFilesIntent: CallbackAction<_FindInFilesIntent>(
+            onInvoke: (_) {
+              _openCommandPalette(PaletteMode.findInFiles);
+              return null;
+            },
+          ),
+          _OpenTerminalIntent: CallbackAction<_OpenTerminalIntent>(
+            onInvoke: (_) {
+              _openTerminal();
+              return null;
+            },
+          ),
+          _ToggleChatIntent: CallbackAction<_ToggleChatIntent>(
+            onInvoke: (_) {
+              setState(() => _chatPanelOpen = !_chatPanelOpen);
+              return null;
+            },
+          ),
         },
         child: Focus(
           autofocus: true,
@@ -302,82 +367,132 @@ class _DesktopShellState extends State<DesktopShell> {
             backgroundColor: const Color(0xFF0a0f1a),
             body: Column(
               children: [
-          // Title bar (empty area at top for window controls on macOS)
-          Container(
-            height: 38,
-            decoration: const BoxDecoration(
-              color: Color(0xFF0a0f1a),
-              border: Border(bottom: BorderSide(color: Color(0xFF1a2234), width: 1)),
-            ),
-            child: Row(
-              children: [
-                const SizedBox(width: 80), // Reserve space for traffic lights
-                const Icon(Icons.terminal, size: 14, color: Color(0xFF8b5cf6)),
-                const SizedBox(width: 8),
-                const Text('Planulix', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFcbd5e1))),
-                const SizedBox(width: 24),
-                _quickButton('⌘P', 'Go to File', () => _openCommandPalette(PaletteMode.files)),
-                _quickButton('⌘⇧F', 'Find in Files', () => _openCommandPalette(PaletteMode.findInFiles)),
-                _quickButton('⌘⇧P', 'Commands', () => _openCommandPalette(PaletteMode.commands)),
-                const Spacer(),
-                _titleBarButton(Icons.terminal, 'New Terminal (⌃`)', () => _openTerminal()),
-                _titleBarButton(
-                  _chatPanelOpen ? Icons.chat : Icons.chat_bubble_outline,
-                  'Toggle Claude Chat (⌘L)',
-                  () => setState(() => _chatPanelOpen = !_chatPanelOpen),
-                ),
-                _titleBarButton(Icons.add, 'New Session', () => _showCreateDialog(state)),
-                _titleBarButton(Icons.refresh, 'Refresh', () => state.refreshSessions(refetchCosts: true)),
-                const SizedBox(width: 8),
-              ],
-            ),
-          ),
-
-          // Main body: activity bar | sidebar | content | chat
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                // Clamp widths to reasonable bounds
-                final maxSidebar = constraints.maxWidth * 0.4;
-                final maxChat = constraints.maxWidth * 0.5;
-                _sidebarWidth = _sidebarWidth.clamp(180.0, maxSidebar);
-                _chatWidth = _chatWidth.clamp(280.0, maxChat);
-
-                return Row(
-                  children: [
-                    _buildActivityBar(),
-                    SizedBox(width: _sidebarWidth, child: _buildSidebar(state)),
-                    ResizableDivider(
-                      onDrag: (dx) => setState(() {
-                        _sidebarWidth = (_sidebarWidth + dx).clamp(180.0, maxSidebar);
-                      }),
+                // Title bar (empty area at top for window controls on macOS)
+                Container(
+                  height: 38,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF0a0f1a),
+                    border: Border(
+                      bottom: BorderSide(color: Color(0xFF1a2234), width: 1),
                     ),
-                    Expanded(child: _buildMainContent(state)),
-                    if (_chatPanelOpen) ...[
-                      ResizableDivider(
-                        onDrag: (dx) => setState(() {
-                          _chatWidth = (_chatWidth - dx).clamp(280.0, maxChat);
-                        }),
+                  ),
+                  child: Row(
+                    children: [
+                      const SizedBox(
+                        width: 80,
+                      ), // Reserve space for traffic lights
+                      const Icon(
+                        Icons.terminal,
+                        size: 14,
+                        color: Color(0xFF8b5cf6),
                       ),
-                      SizedBox(
-                        width: _chatWidth,
-                        child: ClaudeChatPanel(
-                          projectPath: _projectPath,
-                          onClose: () => setState(() => _chatPanelOpen = false),
-                          onPathOpen: (path) => _openFile(path, _projectPath ?? ''),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Planulix',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFFcbd5e1),
                         ),
                       ),
+                      const SizedBox(width: 24),
+                      _quickButton(
+                        '⌘P',
+                        'Go to File',
+                        () => _openCommandPalette(PaletteMode.files),
+                      ),
+                      _quickButton(
+                        '⌘⇧F',
+                        'Find in Files',
+                        () => _openCommandPalette(PaletteMode.findInFiles),
+                      ),
+                      _quickButton(
+                        '⌘⇧P',
+                        'Commands',
+                        () => _openCommandPalette(PaletteMode.commands),
+                      ),
+                      const Spacer(),
+                      _titleBarButton(
+                        Icons.terminal,
+                        'New Terminal (⌃`)',
+                        () => _openTerminal(),
+                      ),
+                      _titleBarButton(
+                        _chatPanelOpen ? Icons.chat : Icons.chat_bubble_outline,
+                        'Toggle Claude Chat (⌘L)',
+                        () => setState(() => _chatPanelOpen = !_chatPanelOpen),
+                      ),
+                      _titleBarButton(
+                        Icons.add,
+                        'New Session',
+                        () => _showCreateDialog(state),
+                      ),
+                      _titleBarButton(
+                        Icons.refresh,
+                        'Refresh',
+                        () => state.refreshSessions(refetchCosts: true),
+                      ),
+                      const SizedBox(width: 8),
                     ],
-                  ],
-                );
-              },
-            ),
-          ),
+                  ),
+                ),
 
-          // Status bar
-          _buildStatusBar(state),
-        ],
-      ),
+                // Main body: activity bar | sidebar | content | chat
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      // Clamp widths to reasonable bounds
+                      final maxSidebar = constraints.maxWidth * 0.4;
+                      final maxChat = constraints.maxWidth * 0.5;
+                      _sidebarWidth = _sidebarWidth.clamp(180.0, maxSidebar);
+                      _chatWidth = _chatWidth.clamp(280.0, maxChat);
+
+                      return Row(
+                        children: [
+                          _buildActivityBar(),
+                          SizedBox(
+                            width: _sidebarWidth,
+                            child: _buildSidebar(state),
+                          ),
+                          ResizableDivider(
+                            onDrag: (dx) => setState(() {
+                              _sidebarWidth = (_sidebarWidth + dx).clamp(
+                                180.0,
+                                maxSidebar,
+                              );
+                            }),
+                          ),
+                          Expanded(child: _buildMainContent(state)),
+                          if (_chatPanelOpen) ...[
+                            ResizableDivider(
+                              onDrag: (dx) => setState(() {
+                                _chatWidth = (_chatWidth - dx).clamp(
+                                  280.0,
+                                  maxChat,
+                                );
+                              }),
+                            ),
+                            SizedBox(
+                              width: _chatWidth,
+                              child: ClaudeChatPanel(
+                                projectPath: _projectPath,
+                                onClose: () =>
+                                    setState(() => _chatPanelOpen = false),
+                                onPathOpen: (path) =>
+                                    _openFile(path, _projectPath ?? ''),
+                              ),
+                            ),
+                          ],
+                        ],
+                      );
+                    },
+                  ),
+                ),
+
+                // Status bar
+                _buildStatusBar(state),
+              ],
+            ),
           ),
         ),
       ),
@@ -400,7 +515,11 @@ class _DesktopShellState extends State<DesktopShell> {
           ),
           child: Text(
             label,
-            style: const TextStyle(fontSize: 10, color: Color(0xFF94a3b8), fontFamily: 'monospace'),
+            style: const TextStyle(
+              fontSize: 10,
+              color: Color(0xFF94a3b8),
+              fontFamily: 'monospace',
+            ),
           ),
         ),
       ),
@@ -432,17 +551,37 @@ class _DesktopShellState extends State<DesktopShell> {
       child: Column(
         children: [
           _activityButton(Icons.folder_outlined, Icons.folder, 0, 'Explorer'),
-          _activityButton(Icons.terminal_outlined, Icons.terminal, 1, 'Sessions'),
-          _activityButton(Icons.analytics_outlined, Icons.analytics, 2, 'Costs'),
+          _activityButton(
+            Icons.terminal_outlined,
+            Icons.terminal,
+            1,
+            'Sessions',
+          ),
+          _activityButton(
+            Icons.analytics_outlined,
+            Icons.analytics,
+            2,
+            'Costs',
+          ),
           const Spacer(),
-          _activityButton(Icons.settings_outlined, Icons.settings, 3, 'Settings'),
+          _activityButton(
+            Icons.settings_outlined,
+            Icons.settings,
+            3,
+            'Settings',
+          ),
           const SizedBox(height: 8),
         ],
       ),
     );
   }
 
-  Widget _activityButton(IconData icon, IconData activeIcon, int index, String tooltip) {
+  Widget _activityButton(
+    IconData icon,
+    IconData activeIcon,
+    int index,
+    String tooltip,
+  ) {
     final selected = _activityBarIndex == index;
     return Tooltip(
       message: tooltip,
@@ -489,9 +628,7 @@ class _DesktopShellState extends State<DesktopShell> {
     final active = state.sessions.where((s) => s['isActive'] == true).length;
 
     return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFF0d1420),
-      ),
+      decoration: const BoxDecoration(color: Color(0xFF0d1420)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -502,12 +639,20 @@ class _DesktopShellState extends State<DesktopShell> {
               children: [
                 const Text(
                   'SESSIONS',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF94a3b8), letterSpacing: 0.5),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF94a3b8),
+                    letterSpacing: 0.5,
+                  ),
                 ),
                 const Spacer(),
                 Text(
                   '$active/${state.sessions.length}',
-                  style: const TextStyle(fontSize: 10, color: Color(0xFF64748b)),
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Color(0xFF64748b),
+                  ),
                 ),
               ],
             ),
@@ -529,10 +674,20 @@ class _DesktopShellState extends State<DesktopShell> {
                 decoration: const InputDecoration(
                   hintText: 'Search sessions...',
                   hintStyle: TextStyle(color: Color(0xFF64748b), fontSize: 12),
-                  prefixIcon: Icon(Icons.search, size: 14, color: Color(0xFF64748b)),
-                  prefixIconConstraints: BoxConstraints(minWidth: 28, minHeight: 28),
+                  prefixIcon: Icon(
+                    Icons.search,
+                    size: 14,
+                    color: Color(0xFF64748b),
+                  ),
+                  prefixIconConstraints: BoxConstraints(
+                    minWidth: 28,
+                    minHeight: 28,
+                  ),
                   border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
                   isDense: true,
                 ),
               ),
@@ -545,7 +700,12 @@ class _DesktopShellState extends State<DesktopShell> {
             padding: EdgeInsets.only(left: 12, right: 12, bottom: 2),
             child: Text(
               'Agent',
-              style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: Color(0xFF64748b), letterSpacing: 0.4),
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF64748b),
+                letterSpacing: 0.4,
+              ),
             ),
           ),
           SizedBox(
@@ -564,20 +724,31 @@ class _DesktopShellState extends State<DesktopShell> {
                     },
                     borderRadius: BorderRadius.circular(3),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
                       decoration: BoxDecoration(
-                        color: selected ? const Color(0xFF8b5cf6).withAlpha(40) : Colors.transparent,
+                        color: selected
+                            ? const Color(0xFF8b5cf6).withAlpha(40)
+                            : Colors.transparent,
                         borderRadius: BorderRadius.circular(3),
                         border: Border.all(
-                          color: selected ? const Color(0xFF8b5cf6) : const Color(0xFF1e2a3d),
+                          color: selected
+                              ? const Color(0xFF8b5cf6)
+                              : const Color(0xFF1e2a3d),
                         ),
                       ),
                       child: Text(
                         f,
                         style: TextStyle(
                           fontSize: 10,
-                          color: selected ? const Color(0xFFc4b5fd) : const Color(0xFF94a3b8),
-                          fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                          color: selected
+                              ? const Color(0xFFc4b5fd)
+                              : const Color(0xFF94a3b8),
+                          fontWeight: selected
+                              ? FontWeight.w600
+                              : FontWeight.w400,
                         ),
                       ),
                     ),
@@ -590,7 +761,12 @@ class _DesktopShellState extends State<DesktopShell> {
             padding: EdgeInsets.only(left: 12, right: 12, top: 6, bottom: 2),
             child: Text(
               'List',
-              style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: Color(0xFF64748b), letterSpacing: 0.4),
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF64748b),
+                letterSpacing: 0.4,
+              ),
             ),
           ),
           SizedBox(
@@ -609,20 +785,31 @@ class _DesktopShellState extends State<DesktopShell> {
                     },
                     borderRadius: BorderRadius.circular(3),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
                       decoration: BoxDecoration(
-                        color: selected ? const Color(0xFF8b5cf6).withAlpha(40) : Colors.transparent,
+                        color: selected
+                            ? const Color(0xFF8b5cf6).withAlpha(40)
+                            : Colors.transparent,
                         borderRadius: BorderRadius.circular(3),
                         border: Border.all(
-                          color: selected ? const Color(0xFF8b5cf6) : const Color(0xFF1e2a3d),
+                          color: selected
+                              ? const Color(0xFF8b5cf6)
+                              : const Color(0xFF1e2a3d),
                         ),
                       ),
                       child: Text(
                         f,
                         style: TextStyle(
                           fontSize: 10,
-                          color: selected ? const Color(0xFFc4b5fd) : const Color(0xFF94a3b8),
-                          fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                          color: selected
+                              ? const Color(0xFFc4b5fd)
+                              : const Color(0xFF94a3b8),
+                          fontWeight: selected
+                              ? FontWeight.w600
+                              : FontWeight.w400,
                         ),
                       ),
                     ),
@@ -649,7 +836,12 @@ class _DesktopShellState extends State<DesktopShell> {
                   const SizedBox(width: 4),
                   const Text(
                     'ACTIVITY',
-                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF94a3b8), letterSpacing: 0.5),
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF94a3b8),
+                      letterSpacing: 0.5,
+                    ),
                   ),
                 ],
               ),
@@ -670,14 +862,18 @@ class _DesktopShellState extends State<DesktopShell> {
                       padding: const EdgeInsets.all(16),
                       child: Text(
                         state.isLoading ? 'Loading...' : 'No sessions',
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF64748b)),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF64748b),
+                        ),
                       ),
                     ),
                   )
                 : ListView.builder(
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     itemCount: sessions.length,
-                    itemBuilder: (_, i) => _sidebarSessionItem(sessions[i], state),
+                    itemBuilder: (_, i) =>
+                        _sidebarSessionItem(sessions[i], state),
                   ),
           ),
         ],
@@ -699,7 +895,9 @@ class _DesktopShellState extends State<DesktopShell> {
     final shortCwd = parts.isNotEmpty ? parts.last : cwd;
     final displayTitle = title.isNotEmpty ? title : shortCwd;
     final cost = state.sessionCostUsd[id];
-    final statusColor = isActive ? const Color(0xFF22c55e) : const Color(0xFF475569);
+    final statusColor = isActive
+        ? const Color(0xFF22c55e)
+        : const Color(0xFF475569);
 
     return Container(
       color: isSelected ? const Color(0xFF1e293b) : null,
@@ -721,7 +919,9 @@ class _DesktopShellState extends State<DesktopShell> {
                 child: Icon(
                   isStarred ? Icons.star : Icons.star_border,
                   size: 16,
-                  color: isStarred ? const Color(0xFFf59e0b) : const Color(0xFF475569),
+                  color: isStarred
+                      ? const Color(0xFFf59e0b)
+                      : const Color(0xFF475569),
                 ),
               ),
             ),
@@ -730,7 +930,10 @@ class _DesktopShellState extends State<DesktopShell> {
             width: 7,
             height: 7,
             margin: const EdgeInsets.only(right: 2),
-            decoration: BoxDecoration(shape: BoxShape.circle, color: statusColor),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: statusColor,
+            ),
           ),
           Expanded(
             child: Material(
@@ -746,8 +949,12 @@ class _DesktopShellState extends State<DesktopShell> {
                           displayTitle,
                           style: TextStyle(
                             fontSize: 12,
-                            color: isSelected ? const Color(0xFFe2e8f0) : const Color(0xFFcbd5e1),
-                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                            color: isSelected
+                                ? const Color(0xFFe2e8f0)
+                                : const Color(0xFFcbd5e1),
+                            fontWeight: isSelected
+                                ? FontWeight.w600
+                                : FontWeight.w400,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -756,21 +963,33 @@ class _DesktopShellState extends State<DesktopShell> {
                       if (cost != null) ...[
                         Text(
                           '~\$${cost.toStringAsFixed(2)}',
-                          style: const TextStyle(fontSize: 9, color: Color(0xFF64748b)),
+                          style: const TextStyle(
+                            fontSize: 9,
+                            color: Color(0xFF64748b),
+                          ),
                         ),
                         const SizedBox(width: 4),
                       ],
                       if (kind.isNotEmpty)
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 1,
+                          ),
                           margin: const EdgeInsets.only(left: 2),
                           decoration: BoxDecoration(
                             color: const Color(0xFF1e2a3d),
                             borderRadius: BorderRadius.circular(2),
                           ),
                           child: Text(
-                            kind.substring(0, kind.length > 6 ? 6 : kind.length),
-                            style: const TextStyle(fontSize: 8, color: Color(0xFF94a3b8)),
+                            kind.substring(
+                              0,
+                              kind.length > 6 ? 6 : kind.length,
+                            ),
+                            style: const TextStyle(
+                              fontSize: 8,
+                              color: Color(0xFF94a3b8),
+                            ),
                           ),
                         ),
                     ],
@@ -782,12 +1001,17 @@ class _DesktopShellState extends State<DesktopShell> {
           Material(
             color: Colors.transparent,
             child: InkWell(
-              onTap: () => _confirmRemoveSession(context, state, id, displayTitle),
+              onTap: () =>
+                  _confirmRemoveSession(context, state, id, displayTitle),
               borderRadius: BorderRadius.circular(4),
               child: const SizedBox(
                 width: 30,
                 height: 36,
-                child: Icon(Icons.delete_outline, size: 15, color: Color(0xFF64748b)),
+                child: Icon(
+                  Icons.delete_outline,
+                  size: 15,
+                  color: Color(0xFF64748b),
+                ),
               ),
             ),
           ),
@@ -848,7 +1072,10 @@ class _DesktopShellState extends State<DesktopShell> {
         final file = rest.substring(sepIdx + 1);
         return DiffViewer(key: ValueKey(tab.id), cwd: cwd, file: file);
       case TabType.terminal:
-        return TerminalPanel(key: ValueKey(tab.id), cwd: tab.cwd ?? '/home/claude');
+        return TerminalPanel(
+          key: ValueKey(tab.id),
+          cwd: tab.cwd ?? '/home/claude',
+        );
     }
   }
 
@@ -897,7 +1124,9 @@ class _DesktopShellState extends State<DesktopShell> {
               tab.label,
               style: TextStyle(
                 fontSize: 12,
-                color: isSelected ? const Color(0xFFe2e8f0) : const Color(0xFF94a3b8),
+                color: isSelected
+                    ? const Color(0xFFe2e8f0)
+                    : const Color(0xFF94a3b8),
               ),
             ),
             const SizedBox(width: 8),
@@ -906,7 +1135,11 @@ class _DesktopShellState extends State<DesktopShell> {
               borderRadius: BorderRadius.circular(3),
               child: Container(
                 padding: const EdgeInsets.all(2),
-                child: const Icon(Icons.close, size: 12, color: Color(0xFF64748b)),
+                child: const Icon(
+                  Icons.close,
+                  size: 12,
+                  color: Color(0xFF64748b),
+                ),
               ),
             ),
           ],
@@ -921,15 +1154,23 @@ class _DesktopShellState extends State<DesktopShell> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Container(
-            width: 80, height: 80,
+            width: 80,
+            height: 80,
             decoration: BoxDecoration(
               color: const Color(0xFF8b5cf6).withAlpha(20),
               borderRadius: BorderRadius.circular(20),
             ),
-            child: const Icon(Icons.terminal, size: 40, color: Color(0xFF8b5cf6)),
+            child: const Icon(
+              Icons.terminal,
+              size: 40,
+              color: Color(0xFF8b5cf6),
+            ),
           ),
           const SizedBox(height: 20),
-          const Text('Planulix', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700)),
+          const Text(
+            'Planulix',
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 6),
           const Text(
             'Десктоп и мобильный клиент для сессий Kimi Code и Claude Code',
@@ -948,7 +1189,14 @@ class _DesktopShellState extends State<DesktopShell> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('Keyboard Shortcuts', style: TextStyle(fontSize: 11, color: Color(0xFF94a3b8), fontWeight: FontWeight.w600)),
+                Text(
+                  'Keyboard Shortcuts',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF94a3b8),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
                 SizedBox(height: 8),
                 _ShortcutHint('⌘N', 'New session'),
                 _ShortcutHint('⌘R', 'Refresh'),
@@ -974,7 +1222,9 @@ class _DesktopShellState extends State<DesktopShell> {
           const Icon(Icons.cloud_done, size: 12, color: Colors.white),
           const SizedBox(width: 4),
           Text(
-            state.api.baseUrl.replaceFirst('http://', '').replaceFirst('/api', ''),
+            state.api.baseUrl
+                .replaceFirst('http://', '')
+                .replaceFirst('/api', ''),
             style: const TextStyle(fontSize: 10, color: Colors.white),
           ),
           const SizedBox(width: 16),
@@ -1013,7 +1263,9 @@ class _DesktopShellState extends State<DesktopShell> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => Dialog(
           backgroundColor: const Color(0xFF1e293b),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
           child: Container(
             width: 520,
             padding: const EdgeInsets.all(24),
@@ -1021,13 +1273,30 @@ class _DesktopShellState extends State<DesktopShell> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('New Session', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                const Text(
+                  'New Session',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
                 const SizedBox(height: 20),
                 Row(
                   children: [
-                    Expanded(child: _dialogModeCard(Icons.rocket_launch, 'Task', selectedMode == 'task', () => setDialogState(() => selectedMode = 'task'))),
+                    Expanded(
+                      child: _dialogModeCard(
+                        Icons.rocket_launch,
+                        'Task',
+                        selectedMode == 'task',
+                        () => setDialogState(() => selectedMode = 'task'),
+                      ),
+                    ),
                     const SizedBox(width: 10),
-                    Expanded(child: _dialogModeCard(Icons.chat_bubble_outline, 'Chat', selectedMode == 'chat', () => setDialogState(() => selectedMode = 'chat'))),
+                    Expanded(
+                      child: _dialogModeCard(
+                        Icons.chat_bubble_outline,
+                        'Chat',
+                        selectedMode == 'chat',
+                        () => setDialogState(() => selectedMode = 'chat'),
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 16),
@@ -1045,7 +1314,11 @@ class _DesktopShellState extends State<DesktopShell> {
                 const SizedBox(height: 10),
                 TextField(
                   controller: promptController,
-                  decoration: _dialogInputDecoration(selectedMode == 'task' ? 'Task description (required)' : 'Initial message (optional)'),
+                  decoration: _dialogInputDecoration(
+                    selectedMode == 'task'
+                        ? 'Task description (required)'
+                        : 'Initial message (optional)',
+                  ),
                   style: const TextStyle(fontSize: 13),
                   maxLines: 4,
                   minLines: 3,
@@ -1054,24 +1327,32 @@ class _DesktopShellState extends State<DesktopShell> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Cancel'),
+                    ),
                     const SizedBox(width: 8),
                     FilledButton(
                       onPressed: () async {
-                        if (selectedMode == 'task' && promptController.text.trim().isEmpty) return;
+                        if (selectedMode == 'task' &&
+                            promptController.text.trim().isEmpty) {
+                          return;
+                        }
                         Navigator.pop(ctx);
                         final messenger = ScaffoldMessenger.of(context);
-                        final kimi = state.agentScope == 'Kimi';
                         final agentId = setupAgentIdForScope(state.agentScope);
-                        final model = kimi
-                            ? kKimiChatModels.first.id
-                            : (state.agentScope == 'Claude' || state.agentScope == 'All')
-                                ? kClaudeChatModels.first.id
-                                : null;
+                        final modelScope = state.agentScope == 'All'
+                            ? 'Claude'
+                            : state.agentScope;
+                        final model = state.modelsForAgent(modelScope).first.id;
                         final ok = await state.createSession(
                           cwd: cwdController.text,
-                          prompt: promptController.text.isNotEmpty ? promptController.text : null,
-                          name: nameController.text.isNotEmpty ? nameController.text : null,
+                          prompt: promptController.text.isNotEmpty
+                              ? promptController.text
+                              : null,
+                          name: nameController.text.isNotEmpty
+                              ? nameController.text
+                              : null,
                           mode: selectedMode,
                           model: model,
                           agent: agentId.isEmpty ? null : agentId,
@@ -1090,16 +1371,24 @@ class _DesktopShellState extends State<DesktopShell> {
                           final msg = state.error ?? 'Failed to create session';
                           messenger.showSnackBar(
                             SnackBar(
-                              content: Text(msg.length > 280 ? '${msg.substring(0, 280)}…' : msg),
+                              content: Text(
+                                msg.length > 280
+                                    ? '${msg.substring(0, 280)}…'
+                                    : msg,
+                              ),
                               backgroundColor: const Color(0xFFb91c1c),
                             ),
                           );
                         }
                       },
                       style: FilledButton.styleFrom(
-                        backgroundColor: selectedMode == 'task' ? const Color(0xFFf59e0b) : const Color(0xFF8b5cf6),
+                        backgroundColor: selectedMode == 'task'
+                            ? const Color(0xFFf59e0b)
+                            : const Color(0xFF8b5cf6),
                       ),
-                      child: Text(selectedMode == 'task' ? 'Launch Task' : 'Start Chat'),
+                      child: Text(
+                        selectedMode == 'task' ? 'Launch Task' : 'Start Chat',
+                      ),
                     ),
                   ],
                 ),
@@ -1111,14 +1400,21 @@ class _DesktopShellState extends State<DesktopShell> {
     );
   }
 
-  Widget _dialogModeCard(IconData icon, String label, bool selected, VoidCallback onTap) {
+  Widget _dialogModeCard(
+    IconData icon,
+    String label,
+    bool selected,
+    VoidCallback onTap,
+  ) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFF8b5cf6).withAlpha(25) : const Color(0xFF0f172a),
+          color: selected
+              ? const Color(0xFF8b5cf6).withAlpha(25)
+              : const Color(0xFF0f172a),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: selected ? const Color(0xFF8b5cf6) : const Color(0xFF334155),
@@ -1127,9 +1423,22 @@ class _DesktopShellState extends State<DesktopShell> {
         ),
         child: Column(
           children: [
-            Icon(icon, size: 24, color: selected ? const Color(0xFF8b5cf6) : const Color(0xFF64748b)),
+            Icon(
+              icon,
+              size: 24,
+              color: selected
+                  ? const Color(0xFF8b5cf6)
+                  : const Color(0xFF64748b),
+            ),
             const SizedBox(height: 4),
-            Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: selected ? Colors.white : const Color(0xFF94a3b8))),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : const Color(0xFF94a3b8),
+              ),
+            ),
           ],
         ),
       ),
@@ -1144,9 +1453,18 @@ class _DesktopShellState extends State<DesktopShell> {
       fillColor: const Color(0xFF0f172a),
       isDense: true,
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF334155))),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF334155))),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: const BorderSide(color: Color(0xFF8b5cf6))),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(6),
+        borderSide: const BorderSide(color: Color(0xFF334155)),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(6),
+        borderSide: const BorderSide(color: Color(0xFF334155)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(6),
+        borderSide: const BorderSide(color: Color(0xFF8b5cf6)),
+      ),
     );
   }
 }
@@ -1170,10 +1488,20 @@ class _ShortcutHint extends StatelessWidget {
               borderRadius: BorderRadius.circular(3),
               border: Border.all(color: const Color(0xFF334155)),
             ),
-            child: Text(key_, style: const TextStyle(fontSize: 10, fontFamily: 'monospace', color: Color(0xFFcbd5e1))),
+            child: Text(
+              key_,
+              style: const TextStyle(
+                fontSize: 10,
+                fontFamily: 'monospace',
+                color: Color(0xFFcbd5e1),
+              ),
+            ),
           ),
           const SizedBox(width: 8),
-          Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFF94a3b8))),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 11, color: Color(0xFF94a3b8)),
+          ),
         ],
       ),
     );
@@ -1195,7 +1523,6 @@ class _FindInFilesIntent extends Intent {
 class _OpenTerminalIntent extends Intent {
   const _OpenTerminalIntent();
 }
-
 
 class _ToggleChatIntent extends Intent {
   const _ToggleChatIntent();

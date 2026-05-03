@@ -3,6 +3,7 @@
 class ChatModelChoice {
   final String label;
   final String id;
+
   /// Short tier hint for subtitle (not exact pricing).
   final String? tier;
   final double priceInPerM;
@@ -88,5 +89,35 @@ const List<ChatModelChoice> kKimiChatModels = [
     tier: 'Long ctx',
     priceInPerM: 0.30,
     priceOutPerM: 0.30,
+  ),
+];
+
+const List<ChatModelChoice> kCursorChatModels = [
+  ChatModelChoice(
+    label: 'Cursor default',
+    id: 'cursor-default',
+    tier: 'Cursor',
+    priceInPerM: 0,
+    priceOutPerM: 0,
+  ),
+];
+
+const List<ChatModelChoice> kCodexChatModels = [
+  ChatModelChoice(
+    label: 'GPT-5.2 Codex',
+    id: 'gpt-5.2-codex',
+    tier: 'Default',
+    priceInPerM: 3.0,
+    priceOutPerM: 15.0,
+  ),
+];
+
+const List<ChatModelChoice> kProviderDefaultChatModels = [
+  ChatModelChoice(
+    label: 'Provider default',
+    id: 'provider-default',
+    tier: 'Default',
+    priceInPerM: 0,
+    priceOutPerM: 0,
   ),
 ];

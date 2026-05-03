@@ -62,6 +62,26 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
     return nw == cwd || nw == pp;
   }
 
+  String _canonicalAgentForScope(String scope) {
+    final id = setupAgentIdForScope(scope == 'All' ? 'Claude' : scope);
+    return id.isEmpty ? 'claude-code' : id;
+  }
+
+  bool _sessionMatchesCurrentAgent(dynamic session, String scope) {
+    if (session is! Map) return false;
+    final want = _canonicalAgentForScope(scope);
+    final raw = (session['agent'] ?? '').toString();
+    final sid = (session['sessionId'] ?? '').toString();
+    if (raw.isEmpty) {
+      return want == 'claude-code' &&
+          !sid.startsWith('kimi-') &&
+          !sid.startsWith('cursor-') &&
+          !sid.startsWith('codex-');
+    }
+    if (raw == want) return true;
+    return want == 'kimi-cli' && (raw == 'kimi' || sid.startsWith('kimi-'));
+  }
+
   /// Same roots as session screen + macOS /Users for local hints.
   static final _chatPathRegex = RegExp(
     r'(/(?:home|tmp|root|etc|var|usr|opt|Users)/[\w./\-]+)',
@@ -90,6 +110,7 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
 
   /// Provider model id for new lines (--model / -m). Scope comes from dashboard filter.
   String _chatModelId = kClaudeChatModels.first.id;
+  String? _lastAgentScope;
   // Monotonic counter to drop stale async results when project switches quickly.
   int _initGen = 0;
 
@@ -206,10 +227,45 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
       _userPinnedToBottom = true;
       _attachments.clear();
       final st = context.read<AppState>();
-      _chatModelId = st.agentScope == 'Kimi'
-          ? kKimiChatModels.first.id
-          : kClaudeChatModels.first.id;
+      _chatModelId = st
+          .modelsForAgent(st.agentScope == 'All' ? 'Claude' : st.agentScope)
+          .first
+          .id;
+      _lastAgentScope = st.agentScope;
       _initSession();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final scope = context.watch<AppState>().agentScope;
+    if (_lastAgentScope == null) {
+      _lastAgentScope = scope;
+      _chatModelId = context
+          .read<AppState>()
+          .modelsForAgent(scope == 'All' ? 'Claude' : scope)
+          .first
+          .id;
+      return;
+    }
+    if (_lastAgentScope != scope) {
+      _lastAgentScope = scope;
+      _pollTimer?.cancel();
+      _teardownEventsChannel();
+      _messages = [];
+      _sessionId = null;
+      _sessionDiagnostics = null;
+      _sessionCost = null;
+      _eventSource = 'poll';
+      _userPinnedToBottom = true;
+      _attachments.clear();
+      _chatModelId = context
+          .read<AppState>()
+          .modelsForAgent(scope == 'All' ? 'Claude' : scope)
+          .first
+          .id;
+      unawaited(_initSession());
     }
   }
 
@@ -232,10 +288,12 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
     setState(() => _loading = true);
     try {
       final state = context.read<AppState>();
+      final scope = state.agentScope;
       // Match server `cwd` or inferred `projectPath` (trailing slash tolerant).
       final existing = state.sessions.firstWhere(
         (s) =>
             _sessionMatchesProject(s, widget.projectPath) &&
+            _sessionMatchesCurrentAgent(s, scope) &&
             s['isActive'] == true,
         orElse: () => null,
       );
@@ -557,8 +615,9 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
     } catch (_) {}
   }
 
-  List<ChatModelChoice> _modelListForScope(String scope) =>
-      context.read<AppState>().modelsForAgent(scope == 'All' ? 'Claude' : scope);
+  List<ChatModelChoice> _modelListForScope(String scope) => context
+      .read<AppState>()
+      .modelsForAgent(scope == 'All' ? 'Claude' : scope);
 
   String _effectiveChatModelId(String agentScope) {
     final list = _modelListForScope(agentScope);

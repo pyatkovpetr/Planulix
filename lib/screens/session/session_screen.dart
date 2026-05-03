@@ -60,7 +60,6 @@ class _SessionScreenState extends State<SessionScreen> {
   }
 
   String _agentNameFromDiagnostics(dynamic diagnostics) {
-    final scope = context.read<AppState>().agentScope;
     final agentRaw = diagnostics is Map
         ? (diagnostics['agent'] ?? '').toString()
         : '';
@@ -69,10 +68,15 @@ class _SessionScreenState extends State<SessionScreen> {
         : '';
     if (agentRaw == 'kimi-cli' ||
         widget.sessionId.startsWith('kimi-') ||
-        canonical.startsWith('kimi-') ||
-        scope == 'Kimi') {
+        canonical.startsWith('kimi-')) {
       return 'Kimi';
     }
+    if (agentRaw == 'cursor') return 'Cursor';
+    if (agentRaw == 'codex-cli') return 'Codex';
+    if (agentRaw == 'kiro-cli') return 'Kiro';
+    if (agentRaw == 'opencode') return 'OpenCode';
+    final scope = context.read<AppState>().agentScope;
+    if (scope != 'All') return scope;
     return 'Claude';
   }
 
@@ -1256,7 +1260,7 @@ class _SessionScreenState extends State<SessionScreen> {
         widget.sessionId,
         text,
         agentEnv: context.read<AppState>().agentEnvForServer(),
-        model: _selectedModelId,
+        model: _selectedModel().id,
       );
       _inputController.clear();
       final assistant = (result['assistant'] ?? '').toString().trim();

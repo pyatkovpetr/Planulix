@@ -229,11 +229,7 @@ class AppState extends ChangeNotifier {
     final uri = Uri.tryParse(normalized);
     final host = uri?.host;
     if (host == null || host.isEmpty) return null;
-    return (
-      host: host,
-      sshUser: p.resolvedSshUser,
-      sshPort: p.resolvedSshPort,
-    );
+    return (host: host, sshUser: p.resolvedSshUser, sshPort: p.resolvedSshPort);
   }
 
   /// Сохраняет SSH-поля для OAuth/браузера через VPS (профиль).
@@ -251,19 +247,17 @@ class AppState extends ChangeNotifier {
     final userStored = u.isEmpty ? null : u;
     final portStored = sshPort > 0 && sshPort < 65536 ? sshPort : 22;
 
-    serverProfiles = serverProfiles
-        .map((p) {
-          if (p.id != id) return p;
-          return ServerProfile(
-            id: p.id,
-            name: p.name,
-            baseUrl: p.baseUrl,
-            token: p.token,
-            sshUser: userStored,
-            sshPort: portStored,
-          );
-        })
-        .toList();
+    serverProfiles = serverProfiles.map((p) {
+      if (p.id != id) return p;
+      return ServerProfile(
+        id: p.id,
+        name: p.name,
+        baseUrl: p.baseUrl,
+        token: p.token,
+        sshUser: userStored,
+        sshPort: portStored,
+      );
+    }).toList();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kProfiles, ServerProfile.listToJson(serverProfiles));
     notifyListeners();
@@ -289,9 +283,32 @@ class AppState extends ChangeNotifier {
     final wanted = agentLabelOrId.toLowerCase();
     final fallback = wanted.contains('kimi')
         ? kKimiChatModels
+        : wanted.contains('cursor')
+        ? kCursorChatModels
+        : wanted.contains('codex')
+        ? kCodexChatModels
+        : wanted.contains('kiro') || wanted.contains('opencode')
+        ? kProviderDefaultChatModels
         : kClaudeChatModels;
     final agents = capabilitiesSnapshot?['agents'];
     if (agents is! List) return fallback;
+
+    bool wantedAgent(String id, String label) {
+      if (wanted == 'all') return id == 'claude-code' || label == 'claude';
+      if (wanted.contains('kimi')) return id == 'kimi-cli' || label == 'kimi';
+      if (wanted.contains('claude')) {
+        return id == 'claude-code' || label == 'claude';
+      }
+      if (wanted.contains('cursor')) return id == 'cursor' || label == 'cursor';
+      if (wanted.contains('codex')) {
+        return id == 'codex-cli' || label == 'codex';
+      }
+      if (wanted.contains('kiro')) return id == 'kiro-cli' || label == 'kiro';
+      if (wanted.contains('opencode') || wanted.contains('open-code')) {
+        return id == 'opencode' || label == 'opencode';
+      }
+      return false;
+    }
 
     Map<String, dynamic>? found;
     for (final raw in agents) {
@@ -299,12 +316,7 @@ class AppState extends ChangeNotifier {
       final a = Map<String, dynamic>.from(raw);
       final id = (a['id'] ?? '').toString().toLowerCase();
       final label = (a['label'] ?? '').toString().toLowerCase();
-      if (wanted.contains('kimi') && (id == 'kimi-cli' || label == 'kimi')) {
-        found = a;
-        break;
-      }
-      if ((wanted.contains('claude') || wanted == 'all') &&
-          (id == 'claude-code' || label == 'claude')) {
+      if (wantedAgent(id, label)) {
         found = a;
         break;
       }
@@ -541,7 +553,8 @@ class AppState extends ChangeNotifier {
         name: name,
         mode: mode,
         model: model,
-        agent: agent ??
+        agent:
+            agent ??
             (setupAgentIdForScope(agentScope).isEmpty
                 ? null
                 : setupAgentIdForScope(agentScope)),

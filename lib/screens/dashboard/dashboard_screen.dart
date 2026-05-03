@@ -415,7 +415,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final activeIn = filtered.where((s) => s['isActive'] == true).length;
     final cliMissingScope =
         scopeHasInstallableCli(state.agentScope) &&
-        !scopeCliInstalledFromCaps(state.capabilitiesSnapshot, state.agentScope);
+        !scopeCliInstalledFromCaps(
+          state.capabilitiesSnapshot,
+          state.agentScope,
+        );
 
     final hero = Material(
       color: const Color(0xFF1e293b),
@@ -512,7 +515,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.warning_amber_rounded, color: Color(0xFFfbbf24), size: 20),
+                  Icon(
+                    Icons.warning_amber_rounded,
+                    color: Color(0xFFfbbf24),
+                    size: 20,
+                  ),
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -530,7 +537,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Text(
                 'Чат/история могут не работать, пока на gateway не появится CLI выбранного агента в PATH. '
                 'Откройте Настройки → блок «CLI-агенты на сервере» → «Установить…».',
-                style: TextStyle(fontSize: 11, color: Color(0xFFfcd34d), height: 1.35),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Color(0xFFfcd34d),
+                  height: 1.35,
+                ),
               ),
             ],
           ),
@@ -1265,14 +1276,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
               !modelChoices.any((m) => m.id == selectedClaudeModel)) {
             selectedClaudeModel = modelChoices.first.id;
           }
-          final accent = providerEntry?.accent ??
+          final accent =
+              providerEntry?.accent ??
               (isKimi ? const Color(0xFF38bdf8) : const Color(0xFF8b5cf6));
           final title = 'Новая сессия $providerTitle';
           final subtitle = isKimi
               ? 'Запускается kimi-cli на сервере (~/.kimi). Ключ API — в настройках приложения.'
               : createProvider == 'Claude'
-                  ? 'Запускается Claude Code в tmux на сервере (~/.claude).'
-                  : 'Запускается CLI $providerTitle в tmux на сервере. Убедитесь, что он установлен в Settings → CLI-агенты.';
+              ? 'Запускается Claude Code в tmux на сервере (~/.claude).'
+              : 'Запускается CLI $providerTitle в tmux на сервере. Убедитесь, что он установлен в Settings → CLI-агенты.';
 
           return SingleChildScrollView(
             child: Padding(
@@ -1330,24 +1342,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       children: kAgentCatalog
                           .where((e) => scopeHasInstallableCli(e.id))
                           .map((e) {
-                        final selected = createProvider == e.id;
-                        return ChoiceChip(
-                          avatar: Icon(e.icon, size: 16, color: e.accent),
-                          label: Text(e.title),
-                          selected: selected,
-                          onSelected: (_) => setSheetState(() {
-                            createProvider = e.id;
-                            if (cwdController.text == '/home/claude') {
-                              cwdController.text = '/root';
-                            }
-                          }),
-                          selectedColor: e.accent.withAlpha(80),
-                          labelStyle: TextStyle(
-                            color: selected ? Colors.white : const Color(0xFF94a3b8),
-                            fontSize: 13,
-                          ),
-                        );
-                      }).toList(),
+                            final selected = createProvider == e.id;
+                            return ChoiceChip(
+                              avatar: Icon(e.icon, size: 16, color: e.accent),
+                              label: Text(e.title),
+                              selected: selected,
+                              onSelected: (_) => setSheetState(() {
+                                createProvider = e.id;
+                                if (cwdController.text == '/home/claude') {
+                                  cwdController.text = '/root';
+                                }
+                              }),
+                              selectedColor: e.accent.withAlpha(80),
+                              labelStyle: TextStyle(
+                                color: selected
+                                    ? Colors.white
+                                    : const Color(0xFF94a3b8),
+                                fontSize: 13,
+                              ),
+                            );
+                          })
+                          .toList(),
                     ),
                   ],
                   const SizedBox(height: 16),
@@ -1402,12 +1417,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                       ? 'Kimi получит задачу и отработает в фоне (как в CLI). Подходит для правок и рефакторинга.'
                                       : 'Живой чат: вы и Kimi переписываетесь по очереди — как в веб-UI.')
                                 : createProvider == 'Claude'
-                                    ? (selectedMode == 'task'
+                                ? (selectedMode == 'task'
                                       ? 'Claude получит задачу и сможет доработать её автономно в tmux.'
-                                        : 'Живой диалог с Claude в tmux: удобно для вопросов и итераций.')
-                                    : (selectedMode == 'task'
-                                        ? '$providerTitle получит prompt в headless/print режиме, если CLI это поддерживает.'
-                                        : 'Planulix откроет интерактивный CLI $providerTitle в tmux и будет отправлять сообщения клавишами.'),
+                                      : 'Живой диалог с Claude в tmux: удобно для вопросов и итераций.')
+                                : (selectedMode == 'task'
+                                      ? '$providerTitle получит prompt в headless/print режиме, если CLI это поддерживает.'
+                                      : 'Planulix откроет интерактивный CLI $providerTitle в tmux и будет отправлять сообщения клавишами.'),
                             style: const TextStyle(
                               fontSize: 12,
                               color: Color(0xFF94a3b8),
@@ -1528,9 +1543,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           model: isKimi
                               ? selectedKimiModel
                               : (createProvider == 'Kiro' ||
-                                      createProvider == 'OpenCode')
-                                  ? null
-                                  : selectedClaudeModel,
+                                    createProvider == 'OpenCode')
+                              ? null
+                              : selectedClaudeModel,
                           agent: setupAgentIdForScope(createProvider).isEmpty
                               ? null
                               : setupAgentIdForScope(createProvider),
@@ -1546,11 +1561,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ),
                           );
                         } else {
-                          final msg = state.error ?? 'Не удалось создать сессию';
+                          final msg =
+                              state.error ?? 'Не удалось создать сессию';
                           messenger.showSnackBar(
                             SnackBar(
                               content: Text(
-                                msg.length > 280 ? '${msg.substring(0, 280)}…' : msg,
+                                msg.length > 280
+                                    ? '${msg.substring(0, 280)}…'
+                                    : msg,
                                 style: const TextStyle(fontSize: 13),
                               ),
                               backgroundColor: const Color(0xFFb91c1c),
