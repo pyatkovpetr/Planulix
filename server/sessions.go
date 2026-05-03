@@ -1229,8 +1229,23 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 			c.JSON(200, gin.H{"ok": true, "assistant": answer})
 			return
 		}
+		// Discovered JSONL sessions (tmux died or opened outside Planulix): Codex/Kiro/OpenCode
+		// have no Planulix "resume shell" wrapper yet — run one-shot CLI task in cwd (same as Cursor).
 		if agentName == "codex-cli" || agentName == "kiro-cli" || agentName == "opencode" {
-			c.JSON(409, gin.H{"error": fmt.Sprintf("%s detached resume is not wired yet; open/create a live Planulix tmux session for this agent", agentName)})
+			if cwd == "" {
+				home, _ := os.UserHomeDir()
+				cwd = home
+			}
+			agentEnv := mergeAgentEnvPreferred(req.AgentEnv, nil)
+			answer, err := runAgentTaskSendResult(agentName, cwd, req.Text, agentEnv, req.Model, "detached-exec-fallback")
+			if err != nil {
+				c.JSON(502, gin.H{"error": err.Error()})
+				return
+			}
+			if rec != nil && strings.HasPrefix(id, "cd-") {
+				s.appendStoredLocalTranscript(rec, req.Text, answer, req.Model)
+			}
+			c.JSON(200, gin.H{"ok": true, "assistant": answer, "fallbackTask": true})
 			return
 		}
 
