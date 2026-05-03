@@ -632,6 +632,22 @@ class ApiClient {
     }
   }
 
+  Future<Map<String, dynamic>> setupAgentAuthSubmit(
+    String agentId, {
+    String? code,
+    String? callbackUrl,
+  }) async {
+    final res = await _dio.post(
+      '/setup/agents/${Uri.encodeComponent(agentId)}/auth/submit',
+      data: {
+        if (code != null && code.trim().isNotEmpty) 'code': code.trim(),
+        if (callbackUrl != null && callbackUrl.trim().isNotEmpty)
+          'callbackUrl': callbackUrl.trim(),
+      },
+    );
+    return Map<String, dynamic>.from(res.data as Map? ?? {});
+  }
+
   Future<Map<String, dynamic>> setupAgentSmokeTest(String agentId) async {
     final res = await _dio.post(
       '/setup/agents/${Uri.encodeComponent(agentId)}/smoke',

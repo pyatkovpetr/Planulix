@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +22,7 @@ type agentAuthRunner struct {
 	agentID  string
 	cancel   context.CancelFunc
 	session  *exec.Cmd
+	stdin    io.WriteCloser
 	urlFile  string
 	tmpDir   string
 	allURLs  []string
@@ -93,11 +95,15 @@ func (ar *agentAuthRunner) cleanupLocked(killProc bool) {
 	if killProc && ar.session != nil && ar.session.Process != nil {
 		_ = ar.session.Process.Kill()
 	}
+	if ar.stdin != nil {
+		_ = ar.stdin.Close()
+	}
 	if ar.cancel != nil {
 		ar.cancel()
 	}
 	td := ar.tmpDir
 	ar.session = nil
+	ar.stdin = nil
 	ar.cancel = nil
 	ar.tmpDir = ""
 	ar.urlFile = ""
@@ -196,6 +202,14 @@ func (s *SessionServer) StartAgentAuth(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		_ = os.RemoveAll(td)
+		globalAgentAuth.mu.Unlock()
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
 	if err := cmd.Start(); err != nil {
 		cancel()
 		_ = os.RemoveAll(td)
@@ -214,6 +228,7 @@ func (s *SessionServer) StartAgentAuth(c *gin.Context) {
 	globalAgentAuth.running = true
 	globalAgentAuth.cancel = cancel
 	globalAgentAuth.session = cmd
+	globalAgentAuth.stdin = stdinPipe
 	globalAgentAuth.mu.Unlock()
 
 	go globalAgentAuth.drain(stdoutPipe)
@@ -227,6 +242,7 @@ func (s *SessionServer) StartAgentAuth(c *gin.Context) {
 		globalAgentAuth.exitedAt = time.Now()
 		globalAgentAuth.running = false
 		globalAgentAuth.session = nil
+		globalAgentAuth.stdin = nil
 		globalAgentAuth.cancel = nil
 		tdLocal := globalAgentAuth.tmpDir
 		globalAgentAuth.tmpDir = ""
@@ -238,6 +254,59 @@ func (s *SessionServer) StartAgentAuth(c *gin.Context) {
 		}
 	}()
 
+	c.JSON(200, gin.H{"ok": true, "agent": agentID})
+}
+
+func authCodeFromInput(code, callbackURL string) string {
+	code = strings.TrimSpace(code)
+	if code != "" && !strings.Contains(code, "://") {
+		return code
+	}
+	raw := strings.TrimSpace(callbackURL)
+	if raw == "" {
+		raw = code
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return code
+	}
+	if v := strings.TrimSpace(u.Query().Get("code")); v != "" {
+		return v
+	}
+	return code
+}
+
+func (s *SessionServer) SubmitAgentAuthCode(c *gin.Context) {
+	agentID := normalizeSetupAgentID(c.Param("id"))
+	var req struct {
+		Code        string `json:"code"`
+		CallbackURL string `json:"callbackUrl"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"ok": false, "error": "invalid request"})
+		return
+	}
+	code := authCodeFromInput(req.Code, req.CallbackURL)
+	if code == "" {
+		c.JSON(400, gin.H{"ok": false, "error": "missing OAuth code"})
+		return
+	}
+
+	globalAgentAuth.mu.Lock()
+	defer globalAgentAuth.mu.Unlock()
+	if !globalAgentAuth.running || globalAgentAuth.stdin == nil {
+		c.JSON(409, gin.H{"ok": false, "error": "auth flow is not running"})
+		return
+	}
+	if globalAgentAuth.agentID != "" && globalAgentAuth.agentID != agentID {
+		c.JSON(409, gin.H{"ok": false, "error": "different auth flow is running", "agent": globalAgentAuth.agentID})
+		return
+	}
+	if _, err := io.WriteString(globalAgentAuth.stdin, code+"\n"); err != nil {
+		c.JSON(500, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	globalAgentAuth.logTail.WriteString("\n[planulix] OAuth code submitted to CLI stdin\n")
 	c.JSON(200, gin.H{"ok": true, "agent": agentID})
 }
 

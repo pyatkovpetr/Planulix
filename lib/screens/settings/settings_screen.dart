@@ -1451,6 +1451,114 @@ curl -fsSL $_kPlanulixInstallScript \\
     }
   }
 
+  Uri? _authRedirectUri(String authUrl) {
+    try {
+      final redirect = Uri.parse(authUrl).queryParameters['redirect_uri'];
+      if (redirect == null || redirect.trim().isEmpty) return null;
+      final uri = Uri.parse(redirect);
+      final host = uri.host.toLowerCase();
+      if (host != 'localhost' && host != '127.0.0.1') return null;
+      if (uri.port <= 0) return null;
+      return uri;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _oauthCodeFromText(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return '';
+    try {
+      final uri = Uri.parse(text);
+      final code = uri.queryParameters['code'];
+      if (code != null && code.trim().isNotEmpty) return code.trim();
+    } catch (_) {}
+    return text;
+  }
+
+  Future<HttpServer?> _startLocalOAuthCallbackListener({
+    required AppState state,
+    required String agentId,
+    required String authUrl,
+    required void Function(String line) onLog,
+  }) async {
+    final redirect = _authRedirectUri(authUrl);
+    if (redirect == null) return null;
+    try {
+      final server = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        redirect.port,
+        shared: true,
+      );
+      onLog(
+        '[planulix] Waiting for local OAuth callback on http://localhost:${redirect.port}${redirect.path}',
+      );
+      unawaited(() async {
+        await for (final req in server) {
+          final callbackUrl = req.requestedUri.toString();
+          final code = req.uri.queryParameters['code'] ?? '';
+          try {
+            await state.api.setupAgentAuthSubmit(
+              agentId,
+              code: code,
+              callbackUrl: callbackUrl,
+            );
+            req.response.statusCode = 200;
+            req.response.headers.contentType = ContentType.html;
+            req.response.write(
+              '<html><body style="font-family:sans-serif"><h2>Planulix: OAuth code sent</h2><p>You can close this tab and return to Planulix.</p></body></html>',
+            );
+            onLog('[planulix] OAuth callback captured and sent to CLI.');
+          } catch (e) {
+            req.response.statusCode = 500;
+            req.response.write('Planulix failed to send OAuth code: $e');
+            onLog('[planulix] Callback submit failed: $e');
+          } finally {
+            await req.response.close();
+            await server.close(force: true);
+          }
+          break;
+        }
+      }());
+      return server;
+    } catch (e) {
+      onLog('[planulix] Could not listen on localhost:${redirect.port}: $e');
+      return null;
+    }
+  }
+
+  Future<void> _submitManualAuthCode({
+    required BuildContext context,
+    required AppState state,
+    required String agentId,
+    required String raw,
+    required void Function(String line) onLog,
+  }) async {
+    final code = _oauthCodeFromText(raw);
+    if (code.isEmpty) return;
+    try {
+      await state.api.setupAgentAuthSubmit(
+        agentId,
+        code: code,
+        callbackUrl: raw,
+      );
+      onLog('[planulix] OAuth code submitted to CLI.');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('OAuth code передан в CLI на VPS')),
+      );
+    } catch (e) {
+      onLog('[planulix] OAuth code submit failed: $e');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Не удалось передать code: $e'),
+          backgroundColor: const Color(0xFFef4444),
+        ),
+      );
+    }
+  }
+
   Future<void> _authorizeAgentCliFromServer(
     BuildContext context,
     AppState state,
@@ -1478,6 +1586,8 @@ curl -fsSL $_kPlanulixInstallScript \\
     var authDone = false;
     var logTail = 'Ожидаю URL от $label CLI...';
     Timer? timer;
+    HttpServer? localCallbackServer;
+    final manualCodeController = TextEditingController();
 
     await showDialog<void>(
       context: context,
@@ -1509,6 +1619,18 @@ curl -fsSL $_kPlanulixInstallScript \\
               if (urls.isNotEmpty && openedUrl != urls.last) {
                 openedUrl = urls.last;
                 if (ctx.mounted) {
+                  await localCallbackServer?.close(force: true);
+                  localCallbackServer = await _startLocalOAuthCallbackListener(
+                    state: state,
+                    agentId: agentId,
+                    authUrl: openedUrl,
+                    onLog: (line) {
+                      if (ctx.mounted) {
+                        setDialogState(() => logTail = '$logTail\n$line');
+                      }
+                    },
+                  );
+                  if (!ctx.mounted) return;
                   await _openAuthUrlViaSocks(ctx, openedUrl);
                 }
               }
@@ -1533,7 +1655,7 @@ curl -fsSL $_kPlanulixInstallScript \\
                   Text(
                     authDone
                         ? 'CLI уже авторизован. Можно создавать новые чаты.'
-                        : 'Planulix запустил login на VPS. Когда CLI отдаст OAuth URL, Chrome откроется через SSH SOCKS5, чтобы внешний IP был IP VPS.',
+                        : 'Planulix запустил login на VPS. Chrome откроется через SSH SOCKS5, а callback localhost будет перехвачен этим приложением и code уйдёт обратно в CLI.',
                     style: TextStyle(
                       fontSize: 12,
                       height: 1.35,
@@ -1552,6 +1674,47 @@ curl -fsSL $_kPlanulixInstallScript \\
                         color: Color(0xFFc4b5fd),
                       ),
                     ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: manualCodeController,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                      color: Color(0xFFe2e8f0),
+                    ),
+                    decoration: InputDecoration(
+                      hintText:
+                          'Если Chrome показал localhost error, вставьте сюда весь callback URL или code=...',
+                      hintStyle: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF64748b),
+                      ),
+                      filled: true,
+                      fillColor: const Color(0xFF0f172a),
+                      isDense: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    minLines: 1,
+                    maxLines: 3,
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _submitManualAuthCode(
+                        context: ctx,
+                        state: state,
+                        agentId: agentId,
+                        raw: manualCodeController.text,
+                        onLog: (line) =>
+                            setDialogState(() => logTail = '$logTail\n$line'),
+                      ),
+                      icon: const Icon(Icons.keyboard_return, size: 18),
+                      label: const Text('Передать code в CLI'),
+                    ),
+                  ),
                   const SizedBox(height: 10),
                   Container(
                     width: double.infinity,
@@ -1597,6 +1760,8 @@ curl -fsSL $_kPlanulixInstallScript \\
     );
 
     timer?.cancel();
+    manualCodeController.dispose();
+    await localCallbackServer?.close(force: true);
     try {
       await state.api.setupAgentAuthStop(agentId);
     } catch (_) {}
