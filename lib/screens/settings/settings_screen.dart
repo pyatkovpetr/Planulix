@@ -12,6 +12,7 @@ import '../../models/server_profile.dart';
 import '../../providers/app_state.dart';
 import '../../services/agent_key_tester.dart';
 import '../../services/remote_gateway_installer.dart';
+import '../../services/ssh_vps_socks_tunnel.dart';
 import '../../utils/agent_catalog.dart';
 import '../../utils/capabilities_helpers.dart';
 import '../../utils/session_filter.dart';
@@ -43,6 +44,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final Set<String> _installingAgents = <String>{};
   bool _refreshingAgentCaps = false;
   Timer? _agentCapsPollTimer;
+  final Set<String> _authorizingAgents = <String>{};
 
   /// Подсказки на экране подключения: Tailscale (клиент) vs SSH-install gateway на VPS.
   bool _connectViaTailscale = true;
@@ -1148,6 +1150,7 @@ curl -fsSL $_kPlanulixInstallScript \\
             );
             final version = '${cap?['version'] ?? ''}'.trim();
             final installing = _installingAgents.contains(setupId);
+            final authorizing = _authorizingAgents.contains(setupId);
             return Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: Container(
@@ -1268,6 +1271,33 @@ curl -fsSL $_kPlanulixInstallScript \\
                               : 'Обновить / переустановить ${e.title}',
                         ),
                       ),
+                      if (_agentSupportsBrowserAuth(setupId)) ...[
+                        const SizedBox(height: 8),
+                        FilledButton.tonalIcon(
+                          onPressed: authorizing || installing
+                              ? null
+                              : () => _authorizeAgentCliFromServer(
+                                  context,
+                                  state,
+                                  setupId,
+                                  e.title,
+                                ),
+                          icon: authorizing
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.login_outlined, size: 20),
+                          label: Text(
+                            authorizing
+                                ? 'Ожидаю авторизацию…'
+                                : 'Авторизовать CLI через SOCKS',
+                          ),
+                        ),
+                      ],
                     ],
                   ],
                 ),
@@ -1296,6 +1326,226 @@ curl -fsSL $_kPlanulixInstallScript \\
       default:
         return '';
     }
+  }
+
+  bool _agentSupportsBrowserAuth(String agentId) {
+    return const {
+      'claude-code',
+      'cursor',
+      'codex-cli',
+      'kiro-cli',
+      'opencode',
+    }.contains(agentId);
+  }
+
+  Future<bool> _ensureSocksProxyForAuth(BuildContext context) async {
+    if (SshVpsSocksTunnel.isLive) return true;
+    final messenger = ScaffoldMessenger.of(context);
+    final t = context.read<AppState>().gatewayVpsTunnelTarget;
+    if (t == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('SOCKS: заполните Server URL, SSH user и SSH port'),
+          backgroundColor: Color(0xFFef4444),
+        ),
+      );
+      return false;
+    }
+    final err = await SshVpsSocksTunnel.ensureRunning(
+      host: t.host,
+      sshUser: t.sshUser,
+      sshPort: t.sshPort,
+    );
+    if (!context.mounted) return false;
+    if (err != null) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('SSH SOCKS: $err'),
+          backgroundColor: const Color(0xFFef4444),
+        ),
+      );
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _openAuthUrlViaSocks(BuildContext context, String url) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final okTunnel = await _ensureSocksProxyForAuth(context);
+    if (!okTunnel || !context.mounted) return;
+    if (Platform.isMacOS) {
+      final ok = await SshVpsSocksTunnel.openChromeWithSocksMacos(url);
+      if (!context.mounted) return;
+      if (!ok) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Не удалось открыть Chrome с SOCKS')),
+        );
+      }
+    } else {
+      await SshVpsSocksTunnel.openUrlFallbackBrowser(url);
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Открыл браузер по умолчанию. Полный SOCKS-browser сейчас автоматизирован для macOS.',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _authorizeAgentCliFromServer(
+    BuildContext context,
+    AppState state,
+    String agentId,
+    String label,
+  ) async {
+    if (_authorizingAgents.contains(agentId)) return;
+    setState(() => _authorizingAgents.add(agentId));
+    try {
+      await state.api.setupAgentAuthStart(agentId);
+    } catch (e) {
+      if (!context.mounted) return;
+      setState(() => _authorizingAgents.remove(agentId));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Не удалось запустить auth wizard: $e'),
+          backgroundColor: const Color(0xFFef4444),
+        ),
+      );
+      return;
+    }
+
+    if (!context.mounted) return;
+    var openedUrl = '';
+    var authDone = false;
+    var logTail = 'Ожидаю URL от $label CLI...';
+    Timer? timer;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          timer ??= Timer.periodic(const Duration(seconds: 2), (_) async {
+            try {
+              final st = await state.api.setupAgentAuthState(agentId);
+              if (!ctx.mounted) return;
+              final urls = (st['urls'] as List? ?? [])
+                  .map((e) => e.toString())
+                  .where((e) => e.startsWith('http'))
+                  .toList();
+              final authenticated = st['authenticated'] == true;
+              final running = st['running'] == true;
+              final exitError = '${st['exit_error'] ?? ''}'.trim();
+              setDialogState(() {
+                authDone = authenticated;
+                logTail = '${st['log_tail'] ?? ''}'.trim();
+                if (logTail.isEmpty) {
+                  logTail = running
+                      ? 'Auth process is running; waiting for browser URL...'
+                      : (exitError.isEmpty
+                            ? 'Auth process exited.'
+                            : exitError);
+                }
+              });
+              if (urls.isNotEmpty && openedUrl != urls.last) {
+                openedUrl = urls.last;
+                if (ctx.mounted) {
+                  await _openAuthUrlViaSocks(ctx, openedUrl);
+                }
+              }
+            } catch (e) {
+              if (!ctx.mounted) return;
+              setDialogState(() => logTail = 'Polling error: $e');
+            }
+          });
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1e293b),
+            title: Text(
+              'Авторизация $label',
+              style: const TextStyle(color: Color(0xFFf1f5f9), fontSize: 18),
+            ),
+            content: SizedBox(
+              width: 560,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    authDone
+                        ? 'CLI уже авторизован. Можно создавать новые чаты.'
+                        : 'Planulix запустил login на VPS. Когда CLI отдаст OAuth URL, Chrome откроется через SSH SOCKS5, чтобы внешний IP был IP VPS.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.35,
+                      color: authDone
+                          ? const Color(0xFF86efac)
+                          : const Color(0xFFcbd5e1),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  if (openedUrl.isNotEmpty)
+                    SelectableText(
+                      openedUrl,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                        color: Color(0xFFc4b5fd),
+                      ),
+                    ),
+                  const SizedBox(height: 10),
+                  Container(
+                    width: double.infinity,
+                    constraints: const BoxConstraints(maxHeight: 220),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0f172a),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFF334155)),
+                    ),
+                    child: SingleChildScrollView(
+                      child: SelectableText(
+                        logTail,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          color: Color(0xFFcbd5e1),
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              if (openedUrl.isNotEmpty)
+                TextButton(
+                  onPressed: () => _openAuthUrlViaSocks(ctx, openedUrl),
+                  child: const Text('Открыть URL через SOCKS'),
+                ),
+              TextButton(
+                onPressed: () async {
+                  await state.api.setupAgentAuthStop(agentId);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+                child: const Text('Закрыть'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    timer?.cancel();
+    try {
+      await state.api.setupAgentAuthStop(agentId);
+    } catch (_) {}
+    if (!context.mounted) return;
+    setState(() => _authorizingAgents.remove(agentId));
+    unawaited(state.loadCapabilitiesIfNeeded());
   }
 
   Future<void> _installAgentCliFromServer(

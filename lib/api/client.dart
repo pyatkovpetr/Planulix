@@ -589,4 +589,46 @@ class ApiClient {
   Future<void> setupClaudeCodeAuthStop() async {
     await _dio.post('/setup/claude-code/auth/stop');
   }
+
+  Future<Map<String, dynamic>> setupAgentAuthStart(String agentId) async {
+    try {
+      final res = await _dio.post(
+        '/setup/agents/${Uri.encodeComponent(agentId)}/auth/start',
+      );
+      return Map<String, dynamic>.from(res.data as Map? ?? {});
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404 && agentId == 'claude-code') {
+        return setupClaudeCodeAuthStart();
+      }
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> setupAgentAuthState(String agentId) async {
+    try {
+      final res = await _dio.get(
+        '/setup/agents/${Uri.encodeComponent(agentId)}/auth/state',
+      );
+      return Map<String, dynamic>.from(res.data as Map? ?? {});
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404 && agentId == 'claude-code') {
+        return setupClaudeCodeAuthState();
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> setupAgentAuthStop(String agentId) async {
+    try {
+      await _dio.post(
+        '/setup/agents/${Uri.encodeComponent(agentId)}/auth/stop',
+      );
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404 && agentId == 'claude-code') {
+        await setupClaudeCodeAuthStop();
+        return;
+      }
+      rethrow;
+    }
+  }
 }

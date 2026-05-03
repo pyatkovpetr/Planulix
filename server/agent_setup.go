@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,6 +19,12 @@ type agentSetupSpec struct {
 	CheckPaths  []string
 	InstallBody string
 	Notes       string
+}
+
+var ansiEscapeRegexp = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+
+func stripANSI(s string) string {
+	return ansiEscapeRegexp.ReplaceAllString(s, "")
 }
 
 func commandPath(candidates ...string) string {
@@ -134,14 +141,23 @@ agent --version 2>/dev/null || true`,
 FORCE="${PLANULIX_AGENT_FORCE_UPDATE:-0}"
 if [ "$FORCE" != "1" ] && command -v opencode >/dev/null 2>&1; then opencode --version || true; exit 0; fi
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL https://opencode.ai/install | bash
-elif command -v npm >/dev/null 2>&1; then
-  npm i -g opencode-ai@latest
-else
-  echo "ERROR: need curl or npm to install OpenCode" >&2
-  exit 20
+  curl -fsSL https://opencode.ai/install | bash || true
 fi
-export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:$PATH"
+if [ -f "$HOME/.profile" ]; then . "$HOME/.profile" >/dev/null 2>&1 || true; fi
+hash -r
+if ! command -v opencode >/dev/null 2>&1; then
+  found="$(find "$HOME" -maxdepth 4 -type f -name opencode -perm -111 2>/dev/null | head -n 1 || true)"
+  if [ -n "$found" ]; then
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$found" "$HOME/.local/bin/opencode"
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
+fi
+if ! command -v opencode >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+  npm i -g opencode-ai@latest
+  hash -r
+fi
 command -v opencode >/dev/null 2>&1
 opencode --version 2>/dev/null || true`,
 			Notes: "OpenCode хранит данные в ~/.local/share/opencode; Planulix пока показывает JSON/JSONL экспорты/логи из этого каталога.",
@@ -198,7 +214,7 @@ func (s *SessionServer) InstallAgentCLI(c *gin.Context) {
 		"PATH="+augmentPathFront(claudeSubprocessHome(), os.Getenv("PATH"), "/usr/local/bin", "/usr/bin", "/bin", "/root/.local/bin"),
 	)
 	out, err := cmd.CombinedOutput()
-	logStr := strings.TrimSpace(string(out))
+	logStr := strings.TrimSpace(stripANSI(string(out)))
 	installedPath := resolveAgentCommand(spec.ID)
 	ok = err == nil && installedPath != ""
 	payload := gin.H{

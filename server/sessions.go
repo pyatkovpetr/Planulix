@@ -771,6 +771,13 @@ func (s *SessionServer) linkKimiSession(managedID, tmuxName, cwd string) {
 	}
 }
 
+func sendLiteralToTmux(tmuxName, text string) error {
+	if err := exec.Command("tmux", "send-keys", "-t", tmuxName, "-l", text).Run(); err != nil {
+		return err
+	}
+	return exec.Command("tmux", "send-keys", "-t", tmuxName, "Enter").Run()
+}
+
 // SendMessage sends input to a tmux session
 func (s *SessionServer) SendMessage(c *gin.Context) {
 	id := c.Param("id")
@@ -806,6 +813,16 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 		rec := (*StoredAgentSession)(nil)
 		if s.agentStore != nil {
 			rec = s.agentStore.Get(id)
+		}
+		if rec != nil && strings.TrimSpace(rec.TmuxName) != "" {
+			if exec.Command("tmux", "has-session", "-t", rec.TmuxName).Run() == nil {
+				if err := sendLiteralToTmux(rec.TmuxName, req.Text); err != nil {
+					c.JSON(500, gin.H{"error": fmt.Sprintf("failed to send to restored tmux session: %v", err)})
+					return
+				}
+				c.JSON(200, gin.H{"ok": true, "restoredTmux": true})
+				return
+			}
 		}
 		cwd := ""
 		if rec != nil {
@@ -916,9 +933,7 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 
 	// Send keys to tmux
 	// Use -l for literal text to handle special chars, then Enter separately
-	exec.Command("tmux", "send-keys", "-t", ts.Name, "-l", req.Text).Run()
-	cmd := exec.Command("tmux", "send-keys", "-t", ts.Name, "Enter")
-	if err := cmd.Run(); err != nil {
+	if err := sendLiteralToTmux(ts.Name, req.Text); err != nil {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("failed to send: %v", err)})
 		return
 	}

@@ -1,0 +1,284 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gin-gonic/gin"
+)
+
+type agentAuthRunner struct {
+	mu       sync.Mutex
+	running  bool
+	agentID  string
+	cancel   context.CancelFunc
+	session  *exec.Cmd
+	urlFile  string
+	tmpDir   string
+	allURLs  []string
+	logTail  bytes.Buffer
+	exitedAt time.Time
+	exitErr  error
+}
+
+var globalAgentAuth agentAuthRunner
+
+func normalizeSetupAgentID(id string) string {
+	switch strings.TrimSpace(id) {
+	case "claude", "claude-code":
+		return "claude-code"
+	case "kimi", "kimi-cli":
+		return "kimi-cli"
+	case "codex", "codex-cli":
+		return "codex-cli"
+	case "cursor":
+		return "cursor"
+	case "kiro", "kiro-cli":
+		return "kiro-cli"
+	case "opencode", "open-code":
+		return "opencode"
+	default:
+		return strings.TrimSpace(id)
+	}
+}
+
+func agentAuthShell(agentID, bin string) (string, error) {
+	q := shellQuote(bin)
+	switch agentID {
+	case "claude-code":
+		return fmt.Sprintf("exec %s auth login", q), nil
+	case "cursor":
+		return fmt.Sprintf("if %s login --help >/dev/null 2>&1; then exec %s login; elif %s auth login --help >/dev/null 2>&1; then exec %s auth login; else echo 'Cursor CLI login subcommand not detected; starting agent to trigger auth URL.'; exec %s; fi", q, q, q, q, q), nil
+	case "codex-cli":
+		return fmt.Sprintf("exec %s login", q), nil
+	case "opencode":
+		return fmt.Sprintf("if %s auth login --help >/dev/null 2>&1; then exec %s auth login; elif %s login --help >/dev/null 2>&1; then exec %s login; else echo 'OpenCode login subcommand not detected. Configure provider/API key manually.'; exit 2; fi", q, q, q, q), nil
+	case "kiro-cli":
+		return fmt.Sprintf("if %s login --help >/dev/null 2>&1; then exec %s login; elif %s auth login --help >/dev/null 2>&1; then exec %s auth login; else exec %s; fi", q, q, q, q, q), nil
+	case "kimi-cli":
+		return fmt.Sprintf("echo 'Kimi CLI usually uses API key/config or interactive /login inside kimi. Start kimi over SSH if browser login is required.'; exec %s", q), nil
+	default:
+		return "", fmt.Errorf("unsupported auth agent: %s", agentID)
+	}
+}
+
+func agentAuthConfigured(agentID, bin string) bool {
+	switch agentID {
+	case "claude-code":
+		return bin != "" && (envAny("ANTHROPIC_API_KEY") || claudeAuthStatusOK(bin))
+	case "kimi-cli":
+		return envAny("KIMI_API_KEY") || envAny("MOONSHOT_API_KEY")
+	case "codex-cli":
+		return envAny("OPENAI_API_KEY")
+	case "opencode":
+		return envAny("ANTHROPIC_API_KEY") || envAny("OPENAI_API_KEY")
+	case "cursor":
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		return bin != "" && exec.CommandContext(ctx, bin, "status").Run() == nil
+	default:
+		return false
+	}
+}
+
+func (ar *agentAuthRunner) cleanupLocked(killProc bool) {
+	if killProc && ar.session != nil && ar.session.Process != nil {
+		_ = ar.session.Process.Kill()
+	}
+	if ar.cancel != nil {
+		ar.cancel()
+	}
+	td := ar.tmpDir
+	ar.session = nil
+	ar.cancel = nil
+	ar.tmpDir = ""
+	ar.urlFile = ""
+	ar.logTail.Reset()
+	if td != "" {
+		_ = os.RemoveAll(td)
+	}
+}
+
+func (ar *agentAuthRunner) drain(r io.Reader) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			chunk := stripANSI(string(buf[:n]))
+			ar.mu.Lock()
+			for _, u := range oauthURLRegexp.FindAllString(chunk, -1) {
+				ar.allURLs = appendUnique(ar.allURLs, []string{u})
+			}
+			if ar.logTail.Len() < 1<<20 {
+				ar.logTail.WriteString(chunk)
+			}
+			ar.mu.Unlock()
+		}
+		if err != nil {
+			break
+		}
+	}
+}
+
+func (s *SessionServer) StartAgentAuth(c *gin.Context) {
+	agentID := normalizeSetupAgentID(c.Param("id"))
+	bin := resolveAgentCommand(agentID)
+	if bin == "" {
+		c.JSON(400, gin.H{"error": "agent CLI is not installed: " + agentID})
+		return
+	}
+	inner, err := agentAuthShell(agentID, bin)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	globalAgentAuth.mu.Lock()
+	if globalAgentAuth.running {
+		globalAgentAuth.mu.Unlock()
+		c.JSON(409, gin.H{"error": "auth flow already running", "agent": globalAgentAuth.agentID})
+		return
+	}
+	globalAgentAuth.cleanupLocked(false)
+	td, err := os.MkdirTemp("", "planulix-agent-auth-*")
+	if err != nil {
+		globalAgentAuth.mu.Unlock()
+		c.JSON(500, gin.H{"error": fmt.Sprintf("temp dir: %v", err)})
+		return
+	}
+	urlCapture := filepath.Join(td, "browser_targets.log")
+	shim := filepath.Join(td, "planulix_browser_capture.sh")
+	shimBody := "#!/usr/bin/env bash\n" +
+		fmt.Sprintf("printf '%%s\\n' \"$*\" >> %q\n", urlCapture) +
+		"exit 0\n"
+	if err := os.WriteFile(shim, []byte(shimBody), 0o755); err != nil {
+		_ = os.RemoveAll(td)
+		globalAgentAuth.mu.Unlock()
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	envExports := genericAgentExports(nil)
+	if agentID == "claude-code" {
+		envExports = claudeExportsForShell(nil)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	shellCmd := fmt.Sprintf("%s && export BROWSER=%q && %s", envExports, shim, inner)
+	var cmd *exec.Cmd
+	if _, err := exec.LookPath("script"); err == nil {
+		cmd = exec.CommandContext(ctx, "script", "-q", "-c", shellCmd, "/dev/null")
+	} else {
+		cmd = exec.CommandContext(ctx, "bash", "-lc", shellCmd)
+	}
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "DISPLAY=", "BROWSER="+shim)
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		_ = os.RemoveAll(td)
+		globalAgentAuth.mu.Unlock()
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		_ = os.RemoveAll(td)
+		globalAgentAuth.mu.Unlock()
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		cancel()
+		_ = os.RemoveAll(td)
+		globalAgentAuth.mu.Unlock()
+		c.JSON(500, gin.H{"error": fmt.Sprintf("start: %v", err)})
+		return
+	}
+
+	globalAgentAuth.agentID = agentID
+	globalAgentAuth.tmpDir = td
+	globalAgentAuth.urlFile = urlCapture
+	globalAgentAuth.allURLs = globalAgentAuth.allURLs[:0]
+	globalAgentAuth.logTail.Reset()
+	globalAgentAuth.exitedAt = time.Time{}
+	globalAgentAuth.exitErr = nil
+	globalAgentAuth.running = true
+	globalAgentAuth.cancel = cancel
+	globalAgentAuth.session = cmd
+	globalAgentAuth.mu.Unlock()
+
+	go globalAgentAuth.drain(stdoutPipe)
+	go globalAgentAuth.drain(stderrPipe)
+	go func() {
+		waitErr := cmd.Wait()
+		globalAgentAuth.mu.Lock()
+		fromFile := readURLFileTail(globalAgentAuth.urlFile)
+		globalAgentAuth.allURLs = appendUnique(globalAgentAuth.allURLs, fromFile)
+		globalAgentAuth.exitErr = waitErr
+		globalAgentAuth.exitedAt = time.Now()
+		globalAgentAuth.running = false
+		globalAgentAuth.session = nil
+		globalAgentAuth.cancel = nil
+		tdLocal := globalAgentAuth.tmpDir
+		globalAgentAuth.tmpDir = ""
+		globalAgentAuth.urlFile = ""
+		globalAgentAuth.mu.Unlock()
+		time.Sleep(250 * time.Millisecond)
+		if tdLocal != "" {
+			_ = os.RemoveAll(tdLocal)
+		}
+	}()
+
+	c.JSON(200, gin.H{"ok": true, "agent": agentID})
+}
+
+func (s *SessionServer) AgentAuthState(c *gin.Context) {
+	agentID := normalizeSetupAgentID(c.Param("id"))
+	globalAgentAuth.mu.Lock()
+	fromFile := []string(nil)
+	if globalAgentAuth.urlFile != "" {
+		fromFile = readURLFileTail(globalAgentAuth.urlFile)
+	}
+	all := appendUnique(append([]string{}, globalAgentAuth.allURLs...), fromFile)
+	running := globalAgentAuth.running && (globalAgentAuth.agentID == agentID || agentID == "")
+	logTail := globalAgentAuth.logTail.String()
+	if len(logTail) > 8000 {
+		logTail = logTail[len(logTail)-8000:]
+	}
+	exitErr := globalAgentAuth.exitErr
+	exitedAt := globalAgentAuth.exitedAt
+	activeAgent := globalAgentAuth.agentID
+	globalAgentAuth.mu.Unlock()
+
+	var exitMsg string
+	if exitErr != nil {
+		exitMsg = exitErr.Error()
+	}
+	bin := resolveAgentCommand(agentID)
+	c.JSON(200, gin.H{
+		"running":       running,
+		"activeAgent":   activeAgent,
+		"urls":          all,
+		"log_tail":      logTail,
+		"exited":        !running && !exitedAt.IsZero(),
+		"exit_error":    exitMsg,
+		"authenticated": agentAuthConfigured(agentID, bin),
+	})
+}
+
+func (s *SessionServer) StopAgentAuth(c *gin.Context) {
+	globalAgentAuth.mu.Lock()
+	globalAgentAuth.cleanupLocked(true)
+	globalAgentAuth.running = false
+	globalAgentAuth.mu.Unlock()
+	c.JSON(200, gin.H{"ok": true})
+}
