@@ -134,6 +134,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return 'https://tailscale.com/download';
   }
 
+  String _shellSingleQuote(String s) => "'${s.replaceAll("'", "'\\''")}'";
+
+  String _gatewayUpdateCommands(AppState state) {
+    final token = state.api.authToken ?? _tokenController.text.trim();
+    final port = Uri.tryParse(state.api.baseUrl)?.port;
+    final portEnv = (port != null && port > 0) ? " PORT='$port'" : '';
+    return '''# Обновить Planulix Gateway на сервере (по SSH):
+# 1) Подключитесь к VPS:
+ssh ${state.gatewayVpsTunnelTarget?.sshUser ?? 'root'}@${state.gatewayVpsTunnelTarget?.host ?? '<server-ip>'}${state.gatewayVpsTunnelTarget == null ? '' : ' -p ${state.gatewayVpsTunnelTarget!.sshPort}'}
+
+# 2) Выполните установщик повторно. Он обновит бинарник и перезапустит systemd/nohup service:
+curl -fsSL $_kPlanulixInstallScript | AUTH_TOKEN=${_shellSingleQuote(token.isEmpty ? '<ваш-token>' : token)}$portEnv bash -s
+''';
+  }
+
   String _sshGatewaySetupCommands() {
     return '''# На своём VPS (Linux) после SSH:
 ssh user@ваш-сервер-ip
@@ -576,6 +591,68 @@ curl -fsSL $_kPlanulixInstallScript \\
             'Each profile is its own Planulix API (URL + token). Sessions come from the machine running that API.',
             style: TextStyle(fontSize: 11, color: Color(0xFF64748b)),
           ),
+          if (state.api.isConfigured) ...[
+            const SizedBox(height: 14),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1e293b),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF334155)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Planulix Gateway',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFf1f5f9),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Это Go-бинарник на VPS. Обновление клиента из GitHub не обновляет уже запущенный gateway автоматически: повторно выполните install script на сервере, он скачает свежий release/соберёт fallback и перезапустит сервис.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.35,
+                      color: Color(0xFF94a3b8),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: () => _showAgentInstallSheet(
+                          context,
+                          _gatewayUpdateCommands(state),
+                          subtitle:
+                              'Это обновляет именно Planulix Gateway (Go server), а не Claude/Kimi/Codex CLI. После gateway-обновления используйте кнопки ниже для обновления CLI-агентов.',
+                        ),
+                        icon: const Icon(Icons.system_update_alt, size: 18),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF7c3aed),
+                        ),
+                        label: const Text('Команда обновления Gateway'),
+                      ),
+                      if (remoteGatewayInstallSupported)
+                        OutlinedButton.icon(
+                          onPressed: _openVpsInstallWizard,
+                          icon: const Icon(Icons.cloud_sync_outlined, size: 18),
+                          label: const Text(
+                            'SSH-мастер (установка/обновление)',
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 20),
           const Text(
             'Session filters',
