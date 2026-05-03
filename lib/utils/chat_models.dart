@@ -97,9 +97,16 @@ const List<ChatModelChoice> kCursorChatModels = [
 
 const List<ChatModelChoice> kCodexChatModels = [
   ChatModelChoice(
+    label: 'Codex default',
+    id: 'provider-default',
+    tier: 'ChatGPT / CLI',
+    priceInPerM: 0,
+    priceOutPerM: 0,
+  ),
+  ChatModelChoice(
     label: 'GPT-5.2 Codex',
     id: 'gpt-5.2-codex',
-    tier: 'Default',
+    tier: 'OpenAI API',
     priceInPerM: 3.0,
     priceOutPerM: 15.0,
   ),

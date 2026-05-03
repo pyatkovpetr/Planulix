@@ -365,6 +365,12 @@ class AppState extends ChangeNotifier {
         ),
       );
     }
+    if (wanted.contains('codex')) {
+      final hasDefault = parsed.any((m) => m.id == 'provider-default');
+      if (!hasDefault) {
+        parsed.insert(0, kCodexChatModels.first);
+      }
+    }
     return parsed.isEmpty ? fallback : parsed;
   }
 

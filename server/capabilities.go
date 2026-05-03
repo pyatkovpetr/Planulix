@@ -145,7 +145,8 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 				Smoke:      codexSmoke,
 				Version:    commandVersion(codexBin),
 				Models: []CapabilityModel{
-					{Label: "GPT-5.2 Codex", ID: "gpt-5.2-codex", Tier: "Default", PriceInPerM: 3.0, PriceOutPerM: 15.0},
+					{Label: "Codex default", ID: "provider-default", Tier: "ChatGPT / CLI", PriceInPerM: 0, PriceOutPerM: 0},
+					{Label: "GPT-5.2 Codex", ID: "gpt-5.2-codex", Tier: "OpenAI API", PriceInPerM: 3.0, PriceOutPerM: 15.0},
 				},
 			},
 			{
