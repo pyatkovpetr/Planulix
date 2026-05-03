@@ -184,6 +184,14 @@ func (s *SessionServer) resolveJSONLPath(clientID string) (jsonlPath, canonicalI
 	if jsonlPath == "" && clientID != canonicalID {
 		jsonlPath = s.findSessionJSONL(clientID)
 	}
+	if jsonlPath == "" {
+		if p, a := s.findDiscoveredAgentHistoryPath(clientID); p != "" {
+			jsonlPath = p
+			if a != "" {
+				agent = a
+			}
+		}
+	}
 	return jsonlPath, canonicalID, agent, tmuxAlive
 }
 
@@ -235,7 +243,7 @@ func (s *SessionServer) CollectSessionsList(limit int) ([]SessionInfo, int) {
 				Title:    ts.Name,
 				IsActive: ts.Status == "running",
 				Extra: map[string]interface{}{
-					"agent":         ts.Agent,
+					"agent":           ts.Agent,
 					"planulixManaged": true,
 				},
 			})
@@ -274,10 +282,10 @@ func (s *SessionServer) CollectSessionsList(limit int) ([]SessionInfo, int) {
 				Title:    rec.Name,
 				IsActive: isActive,
 				Extra: map[string]interface{}{
-					"agent":         rec.Agent,
+					"agent":           rec.Agent,
 					"planulixManaged": true,
-					"fromStore":     true,
-					"storeStatus":   rec.Status,
+					"fromStore":       true,
+					"storeStatus":     rec.Status,
 				},
 			})
 		}
@@ -400,11 +408,11 @@ func (s *SessionServer) GetSession(c *gin.Context) {
 	}
 
 	diag := gin.H{
-		"agent":         agentName,
-		"tmuxAlive":     tmuxAlive,
-		"historyLinked": historyLinked,
-		"historyPath":   jsonlPath,
-		"canonicalId":   canonicalID,
+		"agent":           agentName,
+		"tmuxAlive":       tmuxAlive,
+		"historyLinked":   historyLinked,
+		"historyPath":     jsonlPath,
+		"canonicalId":     canonicalID,
 		"planulixManaged": isManaged,
 	}
 	if agentName == "kimi-cli" && historyLinked {
@@ -457,20 +465,14 @@ func (s *SessionServer) CreateSession(c *gin.Context) {
 		req.Mode = "chat"
 	}
 	if req.Name == "" {
-		prefix := "claude"
-		if isKimiAgent(req.Agent, req.Model) {
-			prefix = "kimi"
-		}
+		prefix := agentTmuxPrefix(req.Agent)
 		// Unix-second names collide under double-create or rapid taps; tmux rejects duplicate targets.
 		req.Name = fmt.Sprintf("%s-%d", prefix, time.Now().UnixMilli())
 	}
 
 	sessionID := fmt.Sprintf("cd-%d", time.Now().UnixMilli())
 
-	agent := "claude-code"
-	if isKimiAgent(req.Agent, req.Model) {
-		agent = "kimi-cli"
-	}
+	agent := normalizeRequestedAgent(req.Agent, req.Model)
 
 	agentCmd, shellEnv, err := buildAgentCommand(agent, req.Mode, req.Cwd, req.Prompt, req.Model, req.AgentEnv)
 	if err != nil {
@@ -535,8 +537,58 @@ func (s *SessionServer) CreateSession(c *gin.Context) {
 	if agent == "kimi-cli" {
 		go s.linkKimiSession(sessionID, req.Name, req.Cwd)
 	}
+	if agent != "claude-code" && agent != "kimi-cli" {
+		go s.linkGenericAgentSession(sessionID, req.Name, req.Cwd, agent)
+	}
 
 	c.JSON(201, gin.H{"session": ts})
+}
+
+func (s *SessionServer) linkGenericAgentSession(managedID, tmuxName, cwd, agent string) {
+	existing := map[string]bool{}
+	for _, sess := range s.discoverAllAgentSessions() {
+		if sess.Extra == nil {
+			continue
+		}
+		if a, _ := sess.Extra["agent"].(string); a == agent {
+			if p, _ := sess.Extra["path"].(string); p != "" {
+				existing[p] = true
+			}
+		}
+	}
+	for i := 0; i < 45; i++ {
+		time.Sleep(1 * time.Second)
+		for _, sess := range s.discoverAllAgentSessions() {
+			if sess.Extra == nil {
+				continue
+			}
+			if a, _ := sess.Extra["agent"].(string); a != agent {
+				continue
+			}
+			p, _ := sess.Extra["path"].(string)
+			if p == "" || existing[p] {
+				continue
+			}
+			s.mu.Lock()
+			if ts, ok := s.tmuxSessions[managedID]; ok {
+				ts.HistoryPath = p
+				ts.ClaudeSession = sess.SessionID
+				s.persistManaged(ts)
+			}
+			s.mu.Unlock()
+			log.Printf("Linked managed session %s -> %s history %s (cwd=%s)", managedID, agent, p, cwd)
+			return
+		}
+		if exec.Command("tmux", "has-session", "-t", tmuxName).Run() != nil {
+			s.mu.Lock()
+			if ts, ok := s.tmuxSessions[managedID]; ok {
+				ts.Status = "done"
+				s.persistManaged(ts)
+			}
+			s.mu.Unlock()
+			return
+		}
+	}
 }
 
 // linkClaudeSession watches for a new Claude Code session JSONL file
@@ -792,6 +844,10 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 				return
 			}
 			c.JSON(200, gin.H{"ok": true, "assistant": answer})
+			return
+		}
+		if agentName == "codex-cli" || agentName == "cursor" || agentName == "kiro-cli" || agentName == "opencode" {
+			c.JSON(409, gin.H{"error": fmt.Sprintf("%s detached resume is not wired yet; open/create a live Planulix tmux session for this agent", agentName)})
 			return
 		}
 

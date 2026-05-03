@@ -8,6 +8,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../providers/app_state.dart';
 import '../../services/ssh_vps_socks_tunnel.dart';
+import '../../utils/capabilities_helpers.dart';
 import '../../utils/chat_models.dart';
 
 class ClaudeChatPanel extends StatefulWidget {
@@ -549,16 +550,15 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
             (data['title'] is String &&
                 (data['title'] as String).trim().isNotEmpty)
             ? data['title'] as String
-            : '${scope == 'Kimi' ? 'Kimi' : 'Claude'} Chat';
+            : '${scope == 'All' ? 'Claude' : scope} Chat';
         if (costMap != null) _sessionCost = costMap;
       });
       _scrollToBottom();
     } catch (_) {}
   }
 
-  List<ChatModelChoice> _modelListForScope(String scope) => context
-      .read<AppState>()
-      .modelsForAgent(scope == 'Kimi' ? 'Kimi' : 'Claude');
+  List<ChatModelChoice> _modelListForScope(String scope) =>
+      context.read<AppState>().modelsForAgent(scope == 'All' ? 'Claude' : scope);
 
   String _effectiveChatModelId(String agentScope) {
     final list = _modelListForScope(agentScope);
@@ -854,7 +854,9 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
           mode: 'chat',
           prompt: finalText,
           model: modelId,
-          agent: state.agentScope == 'Kimi' ? 'kimi-cli' : null,
+          agent: setupAgentIdForScope(state.agentScope).isEmpty
+              ? null
+              : setupAgentIdForScope(state.agentScope),
           agentEnv: state.agentEnvForServer(),
         );
         final sessionRaw = data['session'];
@@ -1328,9 +1330,7 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
                   decoration: InputDecoration(
                     hintText: _sessionId == null
                         ? 'Start new chat... (use / for commands)'
-                        : (appState.agentScope == 'Kimi'
-                              ? 'Message Kimi...'
-                              : 'Message Claude...'),
+                        : 'Message ${appState.agentScope == 'All' ? 'Claude' : appState.agentScope}...',
                     hintStyle: const TextStyle(
                       color: Color(0xFF64748b),
                       fontSize: 12,
@@ -1816,14 +1816,12 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
         }
       }
     }
-    if (Provider.of<AppState>(context, listen: false).agentScope == 'Kimi') {
+    final scope = Provider.of<AppState>(context, listen: false).agentScope;
+    if (scope == 'Kimi') {
       text = _kimiNormalizeLiteralEscapes(text);
     }
 
-    final agentLabel =
-        Provider.of<AppState>(context, listen: false).agentScope == 'Kimi'
-        ? 'Kimi'
-        : 'Claude';
+    final agentLabel = scope == 'All' ? 'Claude' : scope;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),

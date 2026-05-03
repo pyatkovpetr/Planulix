@@ -12,6 +12,7 @@ import '../../models/server_profile.dart';
 import '../../providers/app_state.dart';
 import '../../services/agent_key_tester.dart';
 import '../../services/remote_gateway_installer.dart';
+import '../../utils/agent_catalog.dart';
 import '../../utils/capabilities_helpers.dart';
 import '../../utils/session_filter.dart';
 import '../../widgets/vps_gateway_wizard_dialog.dart';
@@ -38,8 +39,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _keysTestResult;
   bool _agentKeysExpanded = false;
 
-  /// Установка `@anthropic-ai/claude-code` на gateway через `POST /setup/claude-code/install`.
-  bool _installingClaude = false;
+  /// Установка CLI на gateway через `POST /setup/agents/:id/install`.
+  final Set<String> _installingAgents = <String>{};
 
   /// Подсказки на экране подключения: Tailscale (клиент) vs SSH-install gateway на VPS.
   bool _connectViaTailscale = true;
@@ -892,65 +893,7 @@ curl -fsSL $_kPlanulixInstallScript \\
 
           if (state.api.isConfigured) ...[
             const SizedBox(height: 20),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1e293b),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFF334155)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Claude Code на сервере',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFFf1f5f9),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    claudeCodeInstalledFromCaps(state.capabilitiesSnapshot)
-                        ? 'Бинарник `claude` найден на gateway (см. диагностику «Agents & models»). '
-                            'Если чат не отвечает — проверьте ANTHROPIC_API_KEY ниже или `claude auth login` на сервере.'
-                        : 'Чат с Claude Code запускается на той же машине, где работает Planulix Gateway. '
-                            'Сейчас CLI не найден в PATH процесса сервера — установите пакет одной кнопкой '
-                            '(на VPS нужны apt/dnf и доступ в интернет для npm; обычно от root).',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      height: 1.35,
-                      color: Color(0xFF94a3b8),
-                    ),
-                  ),
-                  if (!claudeCodeInstalledFromCaps(state.capabilitiesSnapshot)) ...[
-                    const SizedBox(height: 12),
-                    FilledButton.icon(
-                      onPressed: _installingClaude
-                          ? null
-                          : () => _installClaudeCodeFromServer(context, state),
-                      icon: _installingClaude
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.downloading_outlined, size: 20),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFFc084fc),
-                      ),
-                      label: Text(
-                        _installingClaude
-                            ? 'Установка на сервере…'
-                            : 'Установить Claude Code CLI на сервер',
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
+            _buildAgentCliInstallPanel(context, state),
           ],
 
           if (!widget.isInitial) ...[
@@ -1043,19 +986,164 @@ curl -fsSL $_kPlanulixInstallScript \\
     }
   }
 
-  Future<void> _installClaudeCodeFromServer(BuildContext context, AppState state) async {
-    if (_installingClaude) return;
-    setState(() => _installingClaude = true);
+  Widget _buildAgentCliInstallPanel(BuildContext context, AppState state) {
+    final entries = kAgentCatalog.where((e) => scopeHasInstallableCli(e.id));
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1e293b),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF334155)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'CLI-агенты на сервере',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFFf1f5f9),
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Planulix видит сессии из файлов конкретных CLI. Если агент выбран в Switch agent, но чат не стартует — сначала поставьте его CLI на ту же машину, где работает gateway.',
+            style: TextStyle(fontSize: 12, height: 1.35, color: Color(0xFF94a3b8)),
+          ),
+          const SizedBox(height: 12),
+          ...entries.map((e) {
+            final setupId = setupAgentIdForScope(e.id);
+            final installed = agentInstalledFromCapabilities(
+              state.capabilitiesSnapshot,
+              setupId,
+            );
+            final installing = _installingAgents.contains(setupId);
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0f172a),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: installed
+                        ? const Color(0xFF22c55e).withAlpha(100)
+                        : const Color(0xFF334155),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(e.icon, size: 20, color: e.accent),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            e.title,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFFe2e8f0),
+                            ),
+                          ),
+                        ),
+                        Icon(
+                          installed
+                              ? Icons.check_circle
+                              : Icons.radio_button_unchecked,
+                          size: 18,
+                          color: installed
+                              ? const Color(0xFF22c55e)
+                              : const Color(0xFF64748b),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _agentInstallNote(e.id),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        height: 1.35,
+                        color: Color(0xFF94a3b8),
+                      ),
+                    ),
+                    if (!installed) ...[
+                      const SizedBox(height: 10),
+                      FilledButton.icon(
+                        onPressed: installing
+                            ? null
+                            : () => _installAgentCliFromServer(
+                                  context,
+                                  state,
+                                  setupId,
+                                  e.title,
+                                ),
+                        icon: installing
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.downloading_outlined, size: 20),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: e.accent.withAlpha(210),
+                        ),
+                        label: Text(
+                          installing
+                              ? 'Установка на сервере…'
+                              : 'Установить ${e.title} на сервер',
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  String _agentInstallNote(String scope) {
+    switch (scope) {
+      case 'Claude':
+        return 'Команда: claude. Сессии: ~/.claude/sessions/**/*.jsonl. Чат/таски уже поддержаны; нужен ANTHROPIC_API_KEY или claude auth login.';
+      case 'Kimi':
+        return 'Команда: kimi. Сессии: ~/.kimi/sessions/*/<id>/context.jsonl. Чат/таски уже поддержаны; нужен KIMI_API_KEY/MOONSHOT_API_KEY или config/login Kimi.';
+      case 'Codex':
+        return 'Команда: codex. Сессии читаются из ~/.codex/**/*.jsonl. Сейчас Planulix показывает историю; запуск/резюм Codex из чата будет отдельным шагом.';
+      case 'Cursor':
+        return 'Команда Cursor CLI: agent. Planulix читает ~/.cursor/projects/**/agent-transcripts/*.jsonl; это в основном просмотр транскриптов.';
+      case 'Kiro':
+        return 'Команда: kiro-cli/kiro. Данные: ~/.local/share/kiro-cli (Linux). Требуется login через браузер; запуск из UI пока не подключён.';
+      case 'OpenCode':
+        return 'Команда: opencode. Данные: ~/.local/share/opencode. Planulix пока ищет JSON/JSONL экспорты/логи; запуск из UI позже.';
+      default:
+        return '';
+    }
+  }
+
+  Future<void> _installAgentCliFromServer(
+    BuildContext context,
+    AppState state,
+    String agentId,
+    String label,
+  ) async {
+    if (_installingAgents.contains(agentId)) return;
+    setState(() => _installingAgents.add(agentId));
     Map<String, dynamic>? res;
     Object? thrown;
     try {
-      res = await state.api.setupClaudeCodeInstall();
+      res = await state.api.setupAgentInstall(agentId);
     } catch (e, st) {
       thrown = e;
-      debugPrint('setupClaudeCodeInstall $e\n$st');
+      debugPrint('setupAgentInstall($agentId) $e\n$st');
     }
     if (!context.mounted) return;
-    setState(() => _installingClaude = false);
+    setState(() => _installingAgents.remove(agentId));
 
     await state.loadCapabilitiesIfNeeded();
     if (!context.mounted) return;
@@ -1077,7 +1165,7 @@ curl -fsSL $_kPlanulixInstallScript \\
         backgroundColor: const Color(0xFF1e293b),
         title: Text(
           ok
-              ? 'Claude Code установлен'
+              ? '$label установлен'
               : 'Установка не удалась полностью',
           style: const TextStyle(color: Color(0xFFf1f5f9), fontSize: 18),
         ),
@@ -1129,8 +1217,8 @@ curl -fsSL $_kPlanulixInstallScript \\
       SnackBar(
         content: Text(
           ok
-              ? 'Готово. Укажите Anthropic API key ниже при необходимости и откройте чат снова.'
-              : 'Смотрите лог в диалоге или ставьте CLI вручную по SSH (npm i -g @anthropic-ai/claude-code).',
+              ? 'Готово. При необходимости сохраните API key/login для $label и обновите сессии.'
+              : 'Смотрите лог в диалоге или ставьте CLI вручную по SSH.',
         ),
       ),
     );

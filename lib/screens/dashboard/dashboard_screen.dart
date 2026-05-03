@@ -413,9 +413,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final icon = catalog?.icon ?? Icons.hub_outlined;
     final accent = catalog?.accent ?? const Color(0xFF94a3b8);
     final activeIn = filtered.where((s) => s['isActive'] == true).length;
-    final claudeMissingScope =
-        state.agentScope == 'Claude' &&
-        !claudeCodeInstalledFromCaps(state.capabilitiesSnapshot);
+    final cliMissingScope =
+        scopeHasInstallableCli(state.agentScope) &&
+        !scopeCliInstalledFromCaps(state.capabilitiesSnapshot, state.agentScope);
 
     final hero = Material(
       color: const Color(0xFF1e293b),
@@ -493,7 +493,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
     );
 
-    if (!claudeMissingScope) return hero;
+    if (!cliMissingScope) return hero;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -516,7 +516,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'На сервере нет Claude Code CLI',
+                      'На сервере нет CLI выбранного агента',
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
                         fontSize: 13,
@@ -528,9 +528,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               SizedBox(height: 6),
               Text(
-                'Чат не сможет запуститься, пока на gateway не появится `claude` в PATH. '
-                'Откройте Настройки → блок «Claude Code на сервере» → «Установить…» '
-                '(или вручную по SSH: npm install -g @anthropic-ai/claude-code).',
+                'Чат/история могут не работать, пока на gateway не появится CLI выбранного агента в PATH. '
+                'Откройте Настройки → блок «CLI-агенты на сервере» → «Установить…».',
                 style: TextStyle(fontSize: 11, color: Color(0xFFfcd34d), height: 1.35),
               ),
             ],
@@ -1229,24 +1228,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _showCreateDialog(AppState state) {
-    const unsupportedCreate = {'Codex', 'Cursor', 'Kiro', 'OpenCode'};
-    if (unsupportedCreate.contains(state.agentScope)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Создание сессий ${state.agentScope} из приложения пока не поддерживается — запустите соответствующий CLI на сервере.',
-            style: const TextStyle(fontSize: 13),
-          ),
-          backgroundColor: const Color(0xFF334155),
-        ),
-      );
-      return;
-    }
-
     final nameController = TextEditingController();
     final isKimiScope = state.agentScope == 'Kimi';
     final isAllScope = state.agentScope == 'All';
-    final defaultCwd = isKimiScope ? '/root' : '/home/claude';
+    final defaultCwd = isKimiScope ? '/root' : '/root';
     final cwdController = TextEditingController(text: defaultCwd);
     final promptController = TextEditingController();
     String selectedMode = 'chat';
@@ -1256,7 +1241,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     String selectedKimiModel = kimiModels.first.id;
 
     /// When agent filter is «All», user picks who to create for.
-    String createProvider = isKimiScope ? 'Kimi' : 'Claude';
+    String createProvider = isAllScope ? 'Claude' : state.agentScope;
 
     showModalBottomSheet(
       context: context,
@@ -1268,9 +1253,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) {
           final isKimi = createProvider == 'Kimi';
+          final providerEntry = catalogForAgent(createProvider);
+          final providerTitle = providerEntry?.title ?? createProvider;
           final modelChoices = isKimi
               ? state.modelsForAgent('Kimi')
-              : state.modelsForAgent('Claude');
+              : state.modelsForAgent(createProvider);
           if (isKimi && !modelChoices.any((m) => m.id == selectedKimiModel)) {
             selectedKimiModel = modelChoices.first.id;
           }
@@ -1278,13 +1265,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
               !modelChoices.any((m) => m.id == selectedClaudeModel)) {
             selectedClaudeModel = modelChoices.first.id;
           }
-          final accent = isKimi
-              ? const Color(0xFF38bdf8)
-              : const Color(0xFF8b5cf6);
-          final title = isKimi ? 'Новая сессия Kimi' : 'Новая сессия Claude';
+          final accent = providerEntry?.accent ??
+              (isKimi ? const Color(0xFF38bdf8) : const Color(0xFF8b5cf6));
+          final title = 'Новая сессия $providerTitle';
           final subtitle = isKimi
               ? 'Запускается kimi-cli на сервере (~/.kimi). Ключ API — в настройках приложения.'
-              : 'Запускается Claude Code в tmux на сервере (~/.claude).';
+              : createProvider == 'Claude'
+                  ? 'Запускается Claude Code в tmux на сервере (~/.claude).'
+                  : 'Запускается CLI $providerTitle в tmux на сервере. Убедитесь, что он установлен в Settings → CLI-агенты.';
 
           return SingleChildScrollView(
             child: Padding(
@@ -1336,52 +1324,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ChoiceChip(
-                            label: const Text('Claude Code'),
-                            selected: createProvider == 'Claude',
-                            onSelected: (_) => setSheetState(() {
-                              createProvider = 'Claude';
-                              if (!cwdController.text.contains('kimi')) {
-                                cwdController.text = '/home/claude';
-                              }
-                            }),
-                            selectedColor: const Color(
-                              0xFF8b5cf6,
-                            ).withAlpha(80),
-                            labelStyle: TextStyle(
-                              color: createProvider == 'Claude'
-                                  ? Colors.white
-                                  : const Color(0xFF94a3b8),
-                              fontSize: 13,
-                            ),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: kAgentCatalog
+                          .where((e) => scopeHasInstallableCli(e.id))
+                          .map((e) {
+                        final selected = createProvider == e.id;
+                        return ChoiceChip(
+                          avatar: Icon(e.icon, size: 16, color: e.accent),
+                          label: Text(e.title),
+                          selected: selected,
+                          onSelected: (_) => setSheetState(() {
+                            createProvider = e.id;
+                            if (cwdController.text == '/home/claude') {
+                              cwdController.text = '/root';
+                            }
+                          }),
+                          selectedColor: e.accent.withAlpha(80),
+                          labelStyle: TextStyle(
+                            color: selected ? Colors.white : const Color(0xFF94a3b8),
+                            fontSize: 13,
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: ChoiceChip(
-                            label: const Text('Kimi Code'),
-                            selected: createProvider == 'Kimi',
-                            onSelected: (_) => setSheetState(() {
-                              createProvider = 'Kimi';
-                              if (cwdController.text == '/home/claude') {
-                                cwdController.text = '/root';
-                              }
-                            }),
-                            selectedColor: const Color(
-                              0xFF38bdf8,
-                            ).withAlpha(80),
-                            labelStyle: TextStyle(
-                              color: createProvider == 'Kimi'
-                                  ? Colors.white
-                                  : const Color(0xFF94a3b8),
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ],
+                        );
+                      }).toList(),
                     ),
                   ],
                   const SizedBox(height: 16),
@@ -1435,9 +1401,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 ? (selectedMode == 'task'
                                       ? 'Kimi получит задачу и отработает в фоне (как в CLI). Подходит для правок и рефакторинга.'
                                       : 'Живой чат: вы и Kimi переписываетесь по очереди — как в веб-UI.')
-                                : (selectedMode == 'task'
+                                : createProvider == 'Claude'
+                                    ? (selectedMode == 'task'
                                       ? 'Claude получит задачу и сможет доработать её автономно в tmux.'
-                                      : 'Живой диалог с Claude в tmux: удобно для вопросов и итераций.'),
+                                        : 'Живой диалог с Claude в tmux: удобно для вопросов и итераций.')
+                                    : (selectedMode == 'task'
+                                        ? '$providerTitle получит prompt в headless/print режиме, если CLI это поддерживает.'
+                                        : 'Planulix откроет интерактивный CLI $providerTitle в tmux и будет отправлять сообщения клавишами.'),
                             style: const TextStyle(
                               fontSize: 12,
                               color: Color(0xFF94a3b8),
@@ -1472,7 +1442,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   const SizedBox(height: 12),
 
                   Text(
-                    isKimi ? 'Модель Kimi' : 'Модель Claude',
+                    'Модель $providerTitle',
                     style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -1557,17 +1527,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           mode: selectedMode,
                           model: isKimi
                               ? selectedKimiModel
-                              : selectedClaudeModel,
-                          agent: isKimi ? 'kimi-cli' : null,
+                              : (createProvider == 'Kiro' ||
+                                      createProvider == 'OpenCode')
+                                  ? null
+                                  : selectedClaudeModel,
+                          agent: setupAgentIdForScope(createProvider).isEmpty
+                              ? null
+                              : setupAgentIdForScope(createProvider),
                         );
                         if (!context.mounted) return;
                         if (ok) {
                           messenger.showSnackBar(
                             SnackBar(
                               content: Text(
-                                isKimi
-                                    ? 'Сессия Kimi создана на сервере'
-                                    : 'Сессия Claude создана на сервере',
+                                'Сессия $providerTitle создана на сервере',
                               ),
                               backgroundColor: const Color(0xFF15803d),
                             ),
@@ -1592,13 +1565,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         size: 18,
                       ),
                       label: Text(
-                        isKimi
-                            ? (selectedMode == 'task'
-                                  ? 'Запустить Kimi'
-                                  : 'Чат с Kimi')
-                            : (selectedMode == 'task'
-                                  ? 'Запустить Claude'
-                                  : 'Чат с Claude'),
+                        selectedMode == 'task'
+                            ? 'Запустить $providerTitle'
+                            : 'Чат с $providerTitle',
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                       style: FilledButton.styleFrom(

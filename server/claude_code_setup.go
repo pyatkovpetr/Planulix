@@ -40,19 +40,8 @@ var oauthURLRegexp = regexp.MustCompile(`https?://[^\s'"\]<>\)\\]+`)
 
 // InstallClaudeCode runs the bundled shell script that installs npm + Claude Code CLI.
 func (s *SessionServer) InstallClaudeCode(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-s")
-	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
-	cmd.Stdin = strings.NewReader(embeddedClaudeInstallScript)
-	out, err := cmd.CombinedOutput()
-	logStr := strings.TrimSpace(string(out))
-	ok := err == nil && resolveClaudeBinary() != ""
-	if err != nil {
-		c.JSON(200, gin.H{"ok": ok, "log": logStr, "error": err.Error()})
-		return
-	}
-	c.JSON(200, gin.H{"ok": ok, "log": logStr})
+	c.Params = append(c.Params, gin.Param{Key: "id", Value: "claude-code"})
+	s.InstallAgentCLI(c)
 }
 
 func readURLFileTail(path string) []string {

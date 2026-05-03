@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import '../api/client.dart';
 import '../models/server_profile.dart';
 import '../utils/agent_catalog.dart';
+import '../utils/capabilities_helpers.dart';
 import '../utils/chat_models.dart';
 
 class AppState extends ChangeNotifier {
@@ -540,7 +541,10 @@ class AppState extends ChangeNotifier {
         name: name,
         mode: mode,
         model: model,
-        agent: agent ?? (agentScope == 'Kimi' ? 'kimi-cli' : null),
+        agent: agent ??
+            (setupAgentIdForScope(agentScope).isEmpty
+                ? null
+                : setupAgentIdForScope(agentScope)),
         agentEnv: agentEnvForServer(),
       );
       await refreshSessions();

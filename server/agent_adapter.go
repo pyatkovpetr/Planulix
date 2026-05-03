@@ -122,9 +122,65 @@ func claudeExportsForShell(agentEnv map[string]string) string {
 	)
 }
 
+func genericAgentExports(agentEnv map[string]string) string {
+	home := claudeSubprocessHome()
+	pathAug := augmentPathFront(
+		home,
+		os.Getenv("PATH"),
+		filepath.Join(home, ".local", "bin"),
+		filepath.Join(home, ".npm-global", "bin"),
+		"/usr/local/bin",
+		"/opt/kimi-cli/bin",
+	)
+	return mergeSessionExports(
+		fmt.Sprintf("export HOME=%q PATH=%q TERM=xterm-256color", home, pathAug),
+		shellExportsFromAgentEnv(agentEnv),
+	)
+}
+
+func normalizeRequestedAgent(agent, model string) string {
+	a := strings.ToLower(strings.TrimSpace(agent))
+	switch a {
+	case "", "claude", "claude-code":
+		if isKimiAgent(agent, model) {
+			return "kimi-cli"
+		}
+		return "claude-code"
+	case "kimi", "kimi-cli":
+		return "kimi-cli"
+	case "codex", "codex-cli":
+		return "codex-cli"
+	case "cursor", "cursor-agent":
+		return "cursor"
+	case "kiro", "kiro-cli":
+		return "kiro-cli"
+	case "opencode", "open-code":
+		return "opencode"
+	default:
+		return "claude-code"
+	}
+}
+
+func agentTmuxPrefix(agent string) string {
+	switch normalizeRequestedAgent(agent, "") {
+	case "kimi-cli":
+		return "kimi"
+	case "codex-cli":
+		return "codex"
+	case "cursor":
+		return "cursor"
+	case "kiro-cli":
+		return "kiro"
+	case "opencode":
+		return "opencode"
+	default:
+		return "claude"
+	}
+}
+
 // buildAgentCommand builds shell fragment (no export prefix) and environment exports for tmux bash -c.
 func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[string]string) (cmd string, env string, err error) {
-	switch agent {
+	switch normalizeRequestedAgent(agent, model) {
 	case "kimi-cli":
 		modelFlag := ""
 		if m := strings.TrimSpace(model); m != "" {
@@ -139,6 +195,70 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 			return fmt.Sprintf("%s --print -p %q", base, prompt), env, nil
 		}
 		return base, env, nil
+	case "codex-cli":
+		bin := resolveAgentCommand("codex-cli")
+		if bin == "" {
+			return "", "", fmt.Errorf("codex CLI not found on server (install Codex CLI first)")
+		}
+		env = genericAgentExports(agentEnv)
+		modelFlag := ""
+		if m := strings.TrimSpace(model); m != "" {
+			modelFlag = fmt.Sprintf(" --model %q", m)
+		}
+		q := strconv.Quote(bin)
+		if mode == "task" {
+			if prompt == "" {
+				return "", "", fmt.Errorf("prompt is required for task mode")
+			}
+			return fmt.Sprintf("%s exec --cd %q --sandbox workspace-write --ask-for-approval never --skip-git-repo-check%s %q", q, cwd, modelFlag, prompt), env, nil
+		}
+		return fmt.Sprintf("%s --cd %q --sandbox workspace-write --ask-for-approval never --skip-git-repo-check%s", q, cwd, modelFlag), env, nil
+	case "cursor":
+		bin := resolveAgentCommand("cursor")
+		if bin == "" {
+			return "", "", fmt.Errorf("Cursor CLI agent not found on server (install Cursor CLI first)")
+		}
+		env = genericAgentExports(agentEnv)
+		modelFlag := ""
+		if m := strings.TrimSpace(model); m != "" {
+			modelFlag = fmt.Sprintf(" --model %q", m)
+		}
+		q := strconv.Quote(bin)
+		if mode == "task" {
+			if prompt == "" {
+				return "", "", fmt.Errorf("prompt is required for task mode")
+			}
+			return fmt.Sprintf("%s -p --force%s %q", q, modelFlag, prompt), env, nil
+		}
+		return fmt.Sprintf("%s%s", q, modelFlag), env, nil
+	case "kiro-cli":
+		bin := resolveAgentCommand("kiro-cli")
+		if bin == "" {
+			return "", "", fmt.Errorf("Kiro CLI not found on server (install Kiro CLI first)")
+		}
+		env = genericAgentExports(agentEnv)
+		q := strconv.Quote(bin)
+		if mode == "task" {
+			if prompt == "" {
+				return "", "", fmt.Errorf("prompt is required for task mode")
+			}
+			return fmt.Sprintf("%s chat --no-interactive --trust-all-tools %q", q, prompt), env, nil
+		}
+		return fmt.Sprintf("%s chat --trust-all-tools", q), env, nil
+	case "opencode":
+		bin := resolveAgentCommand("opencode")
+		if bin == "" {
+			return "", "", fmt.Errorf("OpenCode CLI not found on server (install OpenCode first)")
+		}
+		env = genericAgentExports(agentEnv)
+		q := strconv.Quote(bin)
+		if mode == "task" {
+			if prompt == "" {
+				return "", "", fmt.Errorf("prompt is required for task mode")
+			}
+			return fmt.Sprintf("%s run --print %q", q, prompt), env, nil
+		}
+		return q, env, nil
 	default:
 		clBin := resolveClaudeBinary()
 		if clBin == "" {

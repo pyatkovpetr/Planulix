@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../providers/app_state.dart';
+import '../../utils/capabilities_helpers.dart';
 import '../../utils/session_filter.dart';
 import '../session/session_screen.dart';
 import '../cost/cost_screen.dart';
@@ -1061,20 +1062,26 @@ class _DesktopShellState extends State<DesktopShell> {
                         Navigator.pop(ctx);
                         final messenger = ScaffoldMessenger.of(context);
                         final kimi = state.agentScope == 'Kimi';
+                        final agentId = setupAgentIdForScope(state.agentScope);
+                        final model = kimi
+                            ? kKimiChatModels.first.id
+                            : (state.agentScope == 'Claude' || state.agentScope == 'All')
+                                ? kClaudeChatModels.first.id
+                                : null;
                         final ok = await state.createSession(
                           cwd: cwdController.text,
                           prompt: promptController.text.isNotEmpty ? promptController.text : null,
                           name: nameController.text.isNotEmpty ? nameController.text : null,
                           mode: selectedMode,
-                          model: kimi ? kKimiChatModels.first.id : kClaudeChatModels.first.id,
-                          agent: kimi ? 'kimi-cli' : null,
+                          model: model,
+                          agent: agentId.isEmpty ? null : agentId,
                         );
                         if (!context.mounted) return;
                         if (ok) {
                           messenger.showSnackBar(
                             SnackBar(
                               content: Text(
-                                kimi ? 'Kimi session started on server' : 'Claude session started on server',
+                                '${state.agentScope == 'All' ? 'Claude' : state.agentScope} session started on server',
                               ),
                               backgroundColor: const Color(0xFF15803d),
                             ),

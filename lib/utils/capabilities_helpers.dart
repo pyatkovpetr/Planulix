@@ -19,3 +19,30 @@ bool agentInstalledFromCapabilities(
 
 bool claudeCodeInstalledFromCaps(Map<String, dynamic>? caps) =>
     agentInstalledFromCapabilities(caps, 'claude-code');
+
+String setupAgentIdForScope(String scope) {
+  switch (scope) {
+    case 'Claude':
+      return 'claude-code';
+    case 'Kimi':
+      return 'kimi-cli';
+    case 'Codex':
+      return 'codex-cli';
+    case 'Cursor':
+      return 'cursor';
+    case 'Kiro':
+      return 'kiro-cli';
+    case 'OpenCode':
+      return 'opencode';
+    default:
+      return '';
+  }
+}
+
+bool scopeHasInstallableCli(String scope) => setupAgentIdForScope(scope).isNotEmpty;
+
+bool scopeCliInstalledFromCaps(Map<String, dynamic>? caps, String scope) {
+  final agentId = setupAgentIdForScope(scope);
+  if (agentId.isEmpty) return true;
+  return agentInstalledFromCapabilities(caps, agentId);
+}

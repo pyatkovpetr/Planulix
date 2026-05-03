@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -276,6 +277,25 @@ func (s *SessionServer) discoverKiroSessions() []SessionInfo {
 	})
 
 	return sessions
+}
+
+func (s *SessionServer) findDiscoveredAgentHistoryPath(sessionID string) (path, agent string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "", ""
+	}
+	for _, sess := range s.discoverAllAgentSessions() {
+		if sess.SessionID != sessionID {
+			continue
+		}
+		if sess.Extra != nil {
+			if p, ok := sess.Extra["path"].(string); ok && p != "" {
+				return p, fmt.Sprint(sess.Extra["agent"])
+			}
+		}
+		return "", ""
+	}
+	return "", ""
 }
 
 // parseAgentJSONLHeader reads title and message count from a JSONL file (generic)

@@ -70,8 +70,7 @@ func claudeAuthStatusOK(binary string) bool {
 }
 
 func commandInstalled(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
+	return resolveAgentCommand(name) != ""
 }
 
 func envAny(keys ...string) bool {
@@ -86,7 +85,12 @@ func envAny(keys ...string) bool {
 func (s *SessionServer) GetCapabilities(c *gin.Context) {
 	claudeBin := resolveClaudeBinary()
 	claudeInstalled := claudeBin != ""
-	kimiInstalled := commandInstalled("kimi")
+	kimiBin := resolveAgentCommand("kimi-cli")
+	kimiInstalled := kimiBin != ""
+	codexBin := resolveAgentCommand("codex-cli")
+	cursorBin := resolveAgentCommand("cursor")
+	opencodeBin := resolveAgentCommand("opencode")
+	kiroBin := resolveAgentCommand("kiro-cli")
 	claudeConfigured := false
 	if claudeInstalled {
 		claudeConfigured = envAny("ANTHROPIC_API_KEY") || claudeAuthStatusOK(claudeBin)
@@ -94,10 +98,6 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 	claudeVers := ""
 	if claudeInstalled {
 		claudeVers = commandVersion(claudeBin)
-	}
-	kimiBin, _ := exec.LookPath("kimi")
-	if kimiBin == "" {
-		kimiBin = "kimi"
 	}
 	c.JSON(200, gin.H{
 		"serverVersion": "dev",
@@ -119,6 +119,50 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 				Configured: kimiInstalled || envAny("KIMI_API_KEY", "MOONSHOT_API_KEY"),
 				Version:    commandVersion(kimiBin),
 				Models:     kimiCapabilityModels,
+			},
+			{
+				ID:         "codex-cli",
+				Label:      "Codex",
+				Command:    "codex",
+				Installed:  codexBin != "",
+				Configured: codexBin != "" && envAny("OPENAI_API_KEY"),
+				Version:    commandVersion(codexBin),
+				Models: []CapabilityModel{
+					{Label: "GPT-5.2 Codex", ID: "gpt-5.2-codex", Tier: "Default", PriceInPerM: 3.0, PriceOutPerM: 15.0},
+				},
+			},
+			{
+				ID:         "cursor",
+				Label:      "Cursor",
+				Command:    "agent",
+				Installed:  cursorBin != "",
+				Configured: cursorBin != "",
+				Version:    commandVersion(cursorBin),
+				Models: []CapabilityModel{
+					{Label: "GPT-5.2", ID: "gpt-5.2", Tier: "Cursor", PriceInPerM: 0, PriceOutPerM: 0},
+				},
+			},
+			{
+				ID:         "opencode",
+				Label:      "OpenCode",
+				Command:    "opencode",
+				Installed:  opencodeBin != "",
+				Configured: opencodeBin != "",
+				Version:    commandVersion(opencodeBin),
+				Models: []CapabilityModel{
+					{Label: "Provider default", ID: "opencode-default", Tier: "Provider", PriceInPerM: 0, PriceOutPerM: 0},
+				},
+			},
+			{
+				ID:         "kiro-cli",
+				Label:      "Kiro",
+				Command:    "kiro-cli",
+				Installed:  kiroBin != "",
+				Configured: kiroBin != "",
+				Version:    commandVersion(kiroBin),
+				Models: []CapabilityModel{
+					{Label: "Kiro default", ID: "kiro-default", Tier: "Kiro", PriceInPerM: 0, PriceOutPerM: 0},
+				},
 			},
 		},
 	})
