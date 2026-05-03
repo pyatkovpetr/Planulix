@@ -644,41 +644,72 @@ class ApiClient {
     String? code,
     String? callbackUrl,
   }) async {
+    final encodedAgentId = Uri.encodeComponent(agentId);
     final data = <String, dynamic>{
       if (code != null && code.trim().isNotEmpty) 'code': code.trim(),
       if (callbackUrl != null && callbackUrl.trim().isNotEmpty)
         'callbackUrl': callbackUrl.trim(),
     };
-    final rel = 'setup/agents/${Uri.encodeComponent(agentId)}/auth/submit';
+    final rel = 'setup/agents/$encodedAgentId/auth/submit';
 
     Future<Response<dynamic>> postSubmit(Uri uri) =>
         _dio.postUri(uri, data: data);
 
-    /// If nginx forwards `/api/*` → `/*`, `/api/setup/...` becomes 404; gateway also listens on `/setup/...`.
-    Uri? alternateSubmitUriRoot() {
-      var b = baseUrl.trim();
-      if (b.isEmpty) return null;
+    final candidates = <Uri>[];
+    void addCandidate(Uri? uri) {
+      if (uri == null) return;
+      if (!candidates.any(
+        (candidate) => candidate.toString() == uri.toString(),
+      )) {
+        candidates.add(uri);
+      }
+    }
+
+    Uri? parseCandidate(String value) {
+      if (value.trim().isEmpty) return null;
+      return Uri.parse(value);
+    }
+
+    addCandidate(_apiUri(rel));
+
+    var b = baseUrl.trim();
+    if (b.isNotEmpty) {
       while (b.endsWith('/')) {
         b = b.substring(0, b.length - 1);
       }
-      if (!b.endsWith('/api')) return null;
-      final root =
-          b.substring(0, b.length - 4).replaceFirst(RegExp(r'/+$'), '');
-      return Uri.parse(
-        '$root/setup/agents/${Uri.encodeComponent(agentId)}/auth/submit',
+      final root = b.endsWith('/api')
+          ? b.substring(0, b.length - 4).replaceFirst(RegExp(r'/+$'), '')
+          : b;
+
+      // Try both route shapes because nginx deployments may either preserve
+      // or strip `/api`, and older desktop builds used the shorter setup path.
+      addCandidate(
+        parseCandidate('$root/api/setup/agents/$encodedAgentId/auth/submit'),
       );
+      addCandidate(
+        parseCandidate('$root/setup/agents/$encodedAgentId/auth/submit'),
+      );
+      addCandidate(
+        parseCandidate('$root/api/setup/$encodedAgentId/auth/submit'),
+      );
+      addCandidate(parseCandidate('$root/setup/$encodedAgentId/auth/submit'));
     }
 
-    try {
-      final res = await postSubmit(_apiUri(rel));
-      return Map<String, dynamic>.from(res.data as Map? ?? {});
-    } on DioException catch (e) {
-      if (e.response?.statusCode != 404) rethrow;
-      final alt = alternateSubmitUriRoot();
-      if (alt == null) rethrow;
-      final res = await postSubmit(alt);
-      return Map<String, dynamic>.from(res.data as Map? ?? {});
+    final failures = <String>[];
+    for (final uri in candidates) {
+      try {
+        final res = await postSubmit(uri);
+        return Map<String, dynamic>.from(res.data as Map? ?? {});
+      } on DioException catch (e) {
+        final status = e.response?.statusCode;
+        failures.add('${uri.toString()} -> ${status ?? e.type}');
+        if (status != 404) rethrow;
+      }
     }
+
+    throw StateError(
+      'OAuth submit endpoint not found. Tried: ${failures.join('; ')}',
+    );
   }
 
   Future<Map<String, dynamic>> setupAgentSmokeTest(String agentId) async {
