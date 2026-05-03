@@ -876,15 +876,13 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
     final text = _inputController.text.trim();
     if (text.isEmpty && _attachments.isEmpty) return;
     final messenger = ScaffoldMessenger.of(context);
-    if (widget.projectPath == null) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Open a project first')),
-      );
-      return;
-    }
+    final state = context.read<AppState>();
+    final workspace = state.workspacePath?.trim();
+    final chatCwd =
+        widget.projectPath ??
+        ((workspace != null && workspace.isNotEmpty) ? workspace : '/root');
 
     setState(() => _sending = true);
-    final state = context.read<AppState>();
     final modelId = _effectiveChatModelId(state.agentScope);
 
     try {
@@ -904,7 +902,7 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
       // Agent-specific send behavior (Kimi resume, Claude resume, Cursor headless) lives there.
       if (_sessionId == null) {
         final data = await state.api.createSession(
-          cwd: widget.projectPath,
+          cwd: chatCwd,
           mode: 'chat',
           prompt: null,
           model: modelId,

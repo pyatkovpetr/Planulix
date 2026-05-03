@@ -1382,6 +1382,23 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 		return
 	}
 
+	if managedAgent == "codex-cli" || managedAgent == "kiro-cli" || managedAgent == "opencode" {
+		cwd := normalizeSessionCwd(ts.Cwd)
+		model := strings.TrimSpace(req.Model)
+		if model == "" {
+			model = ts.Model
+		}
+		agentEnv := mergeAgentEnvPreferred(req.AgentEnv, ts.ResumeEnv)
+		answer, err := runAgentTaskSendResult(managedAgent, cwd, req.Text, agentEnv, model, "managed-exec-fallback")
+		if err != nil {
+			c.JSON(502, gin.H{"error": err.Error()})
+			return
+		}
+		s.appendManagedLocalTranscript(ts, req.Text, answer, model)
+		c.JSON(200, gin.H{"ok": true, "assistant": answer, "fallbackTask": true})
+		return
+	}
+
 	if managedAgent == "claude-code" {
 		if strings.TrimSpace(ts.ClaudeSession) == "" {
 			if s.agentStore != nil {
