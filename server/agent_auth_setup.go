@@ -51,6 +51,42 @@ func normalizeSetupAgentID(id string) string {
 	}
 }
 
+// codexCliOAuthArtifactsPresent detects CLI login artifacts under ~/.codex (OAuth flows do not always set OPENAI_API_KEY globally).
+func codexCliOAuthArtifactsPresent() bool {
+	h := strings.TrimSpace(claudeSubprocessHome())
+	if h == "" {
+		h = "/root"
+	}
+	dir := filepath.Join(h, ".codex")
+	ent, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range ent {
+		if e.IsDir() {
+			continue
+		}
+		name := strings.ToLower(e.Name())
+		fi, er := e.Info()
+		if er != nil || fi.Size() < 16 {
+			continue
+		}
+		if strings.HasSuffix(name, ".json") &&
+			(strings.Contains(name, "auth") || strings.Contains(name, "oauth") || strings.Contains(name, "credential") ||
+				strings.Contains(name, "token")) {
+			return true
+		}
+		if strings.HasSuffix(name, ".sqlite") || strings.Contains(name, "codex.sqlite") || name == ".credentials" {
+			return true
+		}
+	}
+	return false
+}
+
+func codexCliAuthConfigured() bool {
+	return envAny("OPENAI_API_KEY") || codexCliOAuthArtifactsPresent()
+}
+
 func agentAuthShell(agentID, bin string) (string, error) {
 	q := shellQuote(bin)
 	switch agentID {
@@ -78,7 +114,7 @@ func agentAuthConfigured(agentID, bin string) bool {
 	case "kimi-cli":
 		return envAny("KIMI_API_KEY") || envAny("MOONSHOT_API_KEY")
 	case "codex-cli":
-		return envAny("OPENAI_API_KEY")
+		return codexCliAuthConfigured()
 	case "opencode":
 		return bin != ""
 	case "cursor":
@@ -277,21 +313,44 @@ func (s *SessionServer) SubmitAgentAuthCode(c *gin.Context) {
 	}
 
 	globalAgentAuth.mu.Lock()
-	defer globalAgentAuth.mu.Unlock()
-	if !globalAgentAuth.running || globalAgentAuth.stdin == nil {
-		c.JSON(409, gin.H{"ok": false, "error": "auth flow is not running"})
+	canWriteStdin := globalAgentAuth.running && globalAgentAuth.stdin != nil
+	active := globalAgentAuth.agentID
+	if canWriteStdin && active != "" && active != agentID {
+		globalAgentAuth.mu.Unlock()
+		c.JSON(409, gin.H{"ok": false, "error": "different auth flow is running", "agent": active})
 		return
 	}
-	if globalAgentAuth.agentID != "" && globalAgentAuth.agentID != agentID {
-		c.JSON(409, gin.H{"ok": false, "error": "different auth flow is running", "agent": globalAgentAuth.agentID})
+
+	var stdinErr error
+	if canWriteStdin {
+		_, stdinErr = io.WriteString(globalAgentAuth.stdin, code+"\n")
+		if stdinErr == nil {
+			globalAgentAuth.logTail.WriteString("\n[planulix] OAuth code submitted to CLI stdin\n")
+		}
+	}
+	globalAgentAuth.mu.Unlock()
+
+	if canWriteStdin {
+		if stdinErr != nil {
+			c.JSON(500, gin.H{"ok": false, "error": stdinErr.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"ok": true, "agent": agentID})
 		return
 	}
-	if _, err := io.WriteString(globalAgentAuth.stdin, code+"\n"); err != nil {
-		c.JSON(500, gin.H{"ok": false, "error": err.Error()})
+
+	// Browser redirected and `codex login` exited before user pasted manually — CLI may already be logged in.
+	bin := resolveAgentCommand(agentID)
+	if bin != "" && agentAuthConfigured(agentID, bin) {
+		c.JSON(200, gin.H{
+			"ok":        true,
+			"agent":     agentID,
+			"redundant": true,
+			"message":   "auth flow already finished; CLI is authenticated",
+		})
 		return
 	}
-	globalAgentAuth.logTail.WriteString("\n[planulix] OAuth code submitted to CLI stdin\n")
-	c.JSON(200, gin.H{"ok": true, "agent": agentID})
+	c.JSON(409, gin.H{"ok": false, "error": "auth flow is not running"})
 }
 
 func (s *SessionServer) AgentAuthState(c *gin.Context) {

@@ -103,6 +103,10 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 	claudeSmoke := agentSmokeCached("claude-code")
 	kimiSmoke := agentSmokeCached("kimi-cli")
 	codexSmoke := agentSmokeCached("codex-cli")
+	codexConfigured := false
+	if codexBin != "" {
+		codexConfigured = codexCliAuthConfigured()
+	}
 	cursorSmoke := agentSmokeCached("cursor")
 	opencodeSmoke := agentSmokeCached("opencode")
 	kiroSmoke := agentSmokeCached("kiro-cli")
@@ -136,8 +140,8 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 				Label:      "Codex",
 				Command:    "codex",
 				Installed:  codexBin != "",
-				Configured: codexBin != "" && envAny("OPENAI_API_KEY"),
-				Ready:      codexBin != "" && envAny("OPENAI_API_KEY") && codexSmoke.OK,
+				Configured: codexConfigured,
+				Ready:      codexBin != "" && codexConfigured && codexSmoke.OK,
 				Smoke:      codexSmoke,
 				Version:    commandVersion(codexBin),
 				Models: []CapabilityModel{

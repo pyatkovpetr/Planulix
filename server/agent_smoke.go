@@ -90,7 +90,7 @@ func agentAuthConfiguredForSmoke(agentID, bin string, agentEnv map[string]string
 	case "kimi-cli":
 		return envMapAny(agentEnv, "KIMI_API_KEY", "MOONSHOT_API_KEY") || envAny("KIMI_API_KEY", "MOONSHOT_API_KEY")
 	case "codex-cli":
-		return envMapAny(agentEnv, "OPENAI_API_KEY") || envAny("OPENAI_API_KEY")
+		return envMapAny(agentEnv, "OPENAI_API_KEY") || envAny("OPENAI_API_KEY") || codexCliOAuthArtifactsPresent()
 	default:
 		return agentAuthConfigured(agentID, bin)
 	}

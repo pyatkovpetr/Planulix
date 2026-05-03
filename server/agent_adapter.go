@@ -231,13 +231,15 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 			modelFlag = fmt.Sprintf(" --model %q", m)
 		}
 		q := strconv.Quote(bin)
+		// `codex exec` (smoke/tests/headless) does not accept `--ask-for-approval` — that flag is for the interactive CLI / TUI.
+		// Older Planulix builds passed `--ask-for-approval never`, which breaks codex-cli v0.12x+ exec.
 		if mode == "task" {
 			if prompt == "" {
 				return "", "", fmt.Errorf("prompt is required for task mode")
 			}
-			return fmt.Sprintf("%s exec --cd %q --sandbox workspace-write --ask-for-approval never --skip-git-repo-check%s %q", q, cwd, modelFlag, prompt), env, nil
+			return fmt.Sprintf("%s exec --cd %q --sandbox workspace-write --skip-git-repo-check%s %q", q, cwd, modelFlag, prompt), env, nil
 		}
-		return fmt.Sprintf("%s --cd %q --sandbox workspace-write --ask-for-approval never --skip-git-repo-check%s", q, cwd, modelFlag), env, nil
+		return fmt.Sprintf("%s --cd %q --sandbox workspace-write%s", q, cwd, modelFlag), env, nil
 	case "cursor":
 		bin := resolveAgentCommand("cursor")
 		if bin == "" {
