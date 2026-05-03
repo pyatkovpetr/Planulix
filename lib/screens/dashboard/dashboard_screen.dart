@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/app_state.dart';
 import '../../utils/agent_catalog.dart';
+import '../../utils/capabilities_helpers.dart';
 import '../../utils/session_filter.dart';
 import '../../widgets/activity_heatmap.dart';
 import '../session/session_screen.dart';
@@ -31,6 +34,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!mounted) return;
       final s = context.read<AppState>();
       s.refreshSessions();
+      unawaited(s.loadCapabilitiesIfNeeded());
     });
   }
 
@@ -409,8 +413,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final icon = catalog?.icon ?? Icons.hub_outlined;
     final accent = catalog?.accent ?? const Color(0xFF94a3b8);
     final activeIn = filtered.where((s) => s['isActive'] == true).length;
+    final claudeMissingScope =
+        state.agentScope == 'Claude' &&
+        !claudeCodeInstalledFromCaps(state.capabilitiesSnapshot);
 
-    return Material(
+    final hero = Material(
       color: const Color(0xFF1e293b),
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
@@ -484,6 +491,52 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
       ),
+    );
+
+    if (!claudeMissingScope) return hero;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        hero,
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF422006),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFf59e0b).withAlpha(120)),
+          ),
+          child: const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Color(0xFFfbbf24), size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'На сервере нет Claude Code CLI',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: Color(0xFFfde68a),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 6),
+              Text(
+                'Чат не сможет запуститься, пока на gateway не появится `claude` в PATH. '
+                'Откройте Настройки → блок «Claude Code на сервере» → «Установить…» '
+                '(или вручную по SSH: npm install -g @anthropic-ai/claude-code).',
+                style: TextStyle(fontSize: 11, color: Color(0xFFfcd34d), height: 1.35),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 

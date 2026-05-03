@@ -12,6 +12,7 @@ import '../../models/server_profile.dart';
 import '../../providers/app_state.dart';
 import '../../services/agent_key_tester.dart';
 import '../../services/remote_gateway_installer.dart';
+import '../../utils/capabilities_helpers.dart';
 import '../../utils/session_filter.dart';
 import '../../widgets/vps_gateway_wizard_dialog.dart';
 import '../onboarding/connection_welcome_screen.dart';
@@ -36,6 +37,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _testingKeys = false;
   String? _keysTestResult;
   bool _agentKeysExpanded = false;
+
+  /// Установка `@anthropic-ai/claude-code` на gateway через `POST /setup/claude-code/install`.
+  bool _installingClaude = false;
 
   /// Подсказки на экране подключения: Tailscale (клиент) vs SSH-install gateway на VPS.
   bool _connectViaTailscale = true;
@@ -66,6 +70,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _openaiKeyController = TextEditingController(
       text: state.agentApiKeys['openai'] ?? '',
     );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(context.read<AppState>().loadCapabilitiesIfNeeded());
+    });
   }
 
   @override
@@ -881,6 +890,69 @@ curl -fsSL $_kPlanulixInstallScript \\
             ],
           ),
 
+          if (state.api.isConfigured) ...[
+            const SizedBox(height: 20),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1e293b),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF334155)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Claude Code на сервере',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFf1f5f9),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    claudeCodeInstalledFromCaps(state.capabilitiesSnapshot)
+                        ? 'Бинарник `claude` найден на gateway (см. диагностику «Agents & models»). '
+                            'Если чат не отвечает — проверьте ANTHROPIC_API_KEY ниже или `claude auth login` на сервере.'
+                        : 'Чат с Claude Code запускается на той же машине, где работает Planulix Gateway. '
+                            'Сейчас CLI не найден в PATH процесса сервера — установите пакет одной кнопкой '
+                            '(на VPS нужны apt/dnf и доступ в интернет для npm; обычно от root).',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      height: 1.35,
+                      color: Color(0xFF94a3b8),
+                    ),
+                  ),
+                  if (!claudeCodeInstalledFromCaps(state.capabilitiesSnapshot)) ...[
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: _installingClaude
+                          ? null
+                          : () => _installClaudeCodeFromServer(context, state),
+                      icon: _installingClaude
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.downloading_outlined, size: 20),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFFc084fc),
+                      ),
+                      label: Text(
+                        _installingClaude
+                            ? 'Установка на сервере…'
+                            : 'Установить Claude Code CLI на сервер',
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+
           if (!widget.isInitial) ...[
             const SizedBox(height: 24),
             const Divider(color: Color(0xFF334155)),
@@ -969,6 +1041,99 @@ curl -fsSL $_kPlanulixInstallScript \\
     } finally {
       setState(() => _testing = false);
     }
+  }
+
+  Future<void> _installClaudeCodeFromServer(BuildContext context, AppState state) async {
+    if (_installingClaude) return;
+    setState(() => _installingClaude = true);
+    Map<String, dynamic>? res;
+    Object? thrown;
+    try {
+      res = await state.api.setupClaudeCodeInstall();
+    } catch (e, st) {
+      thrown = e;
+      debugPrint('setupClaudeCodeInstall $e\n$st');
+    }
+    if (!context.mounted) return;
+    setState(() => _installingClaude = false);
+
+    await state.loadCapabilitiesIfNeeded();
+    if (!context.mounted) return;
+
+    if (thrown != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Сеть/API: $thrown')),
+      );
+      return;
+    }
+
+    final ok = res?['ok'] == true;
+    final log = '${res?['log'] ?? ''}'.trim();
+    final err = '${res?['error'] ?? ''}'.trim();
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1e293b),
+        title: Text(
+          ok
+              ? 'Claude Code установлен'
+              : 'Установка не удалась полностью',
+          style: const TextStyle(color: Color(0xFFf1f5f9), fontSize: 18),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (err.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    err,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFFf87171),
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              if (log.isNotEmpty)
+                SelectableText(
+                  log,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    color: Color(0xFFcbd5e1),
+                    height: 1.35,
+                  ),
+                )
+              else
+                const Text(
+                  'Нет текста лога от сервера.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF94a3b8)),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Готово. Укажите Anthropic API key ниже при необходимости и откройте чат снова.'
+              : 'Смотрите лог в диалоге или ставьте CLI вручную по SSH (npm i -g @anthropic-ai/claude-code).',
+        ),
+      ),
+    );
   }
 
   Future<void> _save() async {
