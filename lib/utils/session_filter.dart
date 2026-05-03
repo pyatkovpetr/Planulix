@@ -1,3 +1,5 @@
+import 'session_agent.dart';
+
 /// Agent source: whose sessions (API `kind` / id).
 const List<String> kAgentScopeOptions = [
   'All',
@@ -11,12 +13,7 @@ const List<String> kAgentScopeOptions = [
 ];
 
 /// Narrow within current agent: all, starred, active, finished.
-const List<String> kListScopeOptions = [
-  'All',
-  'Starred',
-  'Active',
-  'Finished',
-];
+const List<String> kListScopeOptions = ['All', 'Starred', 'Active', 'Finished'];
 
 /// Agents whose sessions are discovered from files only — server keeps `isActive: false`.
 /// «Active» list filter would show none; map it to «All» in [applySessionQuery].
@@ -63,19 +60,16 @@ List<dynamic> applyListScope(Iterable<dynamic> sessions, String listScope) {
 }
 
 /// Agent scope, then list scope (e.g. Claude + Starred).
-List<dynamic> applySessionQuery(Iterable<dynamic> sessions, String agentScope, String listScope) {
+List<dynamic> applySessionQuery(
+  Iterable<dynamic> sessions,
+  String agentScope,
+  String listScope,
+) {
   var effectiveList = listScope;
   if (listScope == 'Active' && kFileDiscoveryAgents.contains(agentScope)) {
     effectiveList = 'All';
   }
   return applyListScope(applyAgentScope(sessions, agentScope), effectiveList);
-}
-
-bool _managedAgentIs(dynamic extra, bool Function(String a) predicate) {
-  if (extra is! Map) return false;
-  if (extra['planulixManaged'] != true) return false;
-  final a = (extra['agent'] ?? '').toString().toLowerCase().trim();
-  return predicate(a);
 }
 
 /// Apply the dashboard-style filter to a copy of [sessions] (single flat filter).
@@ -95,46 +89,34 @@ List<dynamic> applySessionFilter(Iterable<dynamic> sessions, String filter) {
       list = list.where((s) => s['isActive'] != true).toList();
       break;
     case 'Claude':
-      list = list.where((s) {
-        final ex = s['extra'];
-        if (_managedAgentIs(
-          ex,
-          (a) =>
-              a == 'claude-code' ||
-              (a.contains('claude') && !a.contains('kimi')),
-        )) {
-          return true;
-        }
-        final k = (s['kind'] ?? '').toString();
-        final e = (s['entrypoint'] ?? '').toString();
-        return k.isEmpty || k.contains('claude') || e.contains('claude') || e == 'cli';
-      }).toList();
+      list = list
+          .where((s) => inferSessionCanonicalCli(s) == 'claude-code')
+          .toList();
       break;
     case 'Codex':
-      list = list.where((s) => (s['kind'] ?? '').toString().contains('codex')).toList();
+      list = list
+          .where((s) => inferSessionCanonicalCli(s) == 'codex-cli')
+          .toList();
       break;
     case 'Cursor':
-      list = list.where((s) => (s['kind'] ?? '').toString().contains('cursor')).toList();
+      list = list
+          .where((s) => inferSessionCanonicalCli(s) == 'cursor')
+          .toList();
       break;
     case 'Kiro':
-      list = list.where((s) => (s['kind'] ?? '').toString().contains('kiro')).toList();
+      list = list
+          .where((s) => inferSessionCanonicalCli(s) == 'kiro-cli')
+          .toList();
       break;
     case 'Kimi':
-      list = list.where((s) {
-        final ex = s['extra'];
-        if (_managedAgentIs(
-          ex,
-          (a) => a == 'kimi-cli' || a.contains('kimi'),
-        )) {
-          return true;
-        }
-        final k = (s['kind'] ?? '').toString();
-        final id = (s['sessionId'] ?? '').toString();
-        return k.contains('kimi') || id.startsWith('kimi-');
-      }).toList();
+      list = list
+          .where((s) => inferSessionCanonicalCli(s) == 'kimi-cli')
+          .toList();
       break;
     case 'OpenCode':
-      list = list.where((s) => (s['kind'] ?? '').toString().contains('opencode')).toList();
+      list = list
+          .where((s) => inferSessionCanonicalCli(s) == 'opencode')
+          .toList();
       break;
     case 'Planulix':
       list = list.where((s) {

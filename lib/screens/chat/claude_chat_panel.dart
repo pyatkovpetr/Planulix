@@ -10,6 +10,7 @@ import '../../providers/app_state.dart';
 import '../../services/ssh_vps_socks_tunnel.dart';
 import '../../utils/capabilities_helpers.dart';
 import '../../utils/chat_models.dart';
+import '../../utils/session_agent.dart';
 
 class ClaudeChatPanel extends StatefulWidget {
   final String? projectPath;
@@ -70,16 +71,7 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
   bool _sessionMatchesCurrentAgent(dynamic session, String scope) {
     if (session is! Map) return false;
     final want = _canonicalAgentForScope(scope);
-    final raw = (session['agent'] ?? '').toString();
-    final sid = (session['sessionId'] ?? '').toString();
-    if (raw.isEmpty) {
-      return want == 'claude-code' &&
-          !sid.startsWith('kimi-') &&
-          !sid.startsWith('cursor-') &&
-          !sid.startsWith('codex-');
-    }
-    if (raw == want) return true;
-    return want == 'kimi-cli' && (raw == 'kimi' || sid.startsWith('kimi-'));
+    return sessionMatchesCanonicalCli(session, want);
   }
 
   /// Same roots as session screen + macOS /Users for local hints.

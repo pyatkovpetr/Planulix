@@ -475,6 +475,9 @@ class _DesktopShellState extends State<DesktopShell> {
                             SizedBox(
                               width: _chatWidth,
                               child: ClaudeChatPanel(
+                                key: ValueKey(
+                                  '${state.agentScope}|${_projectPath ?? ''}',
+                                ),
                                 projectPath: _projectPath,
                                 onClose: () =>
                                     setState(() => _chatPanelOpen = false),
