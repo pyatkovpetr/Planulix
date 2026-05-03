@@ -103,6 +103,24 @@ func inferProjectInfo(cwd string) (name, path string) {
 	return base, cwd
 }
 
+func normalizeSessionCwd(cwd string) string {
+	cwd = strings.TrimSpace(cwd)
+	home, _ := os.UserHomeDir()
+	if cwd == "" {
+		if home != "" {
+			return home
+		}
+		return "/"
+	}
+	if st, err := os.Stat(cwd); err == nil && st.IsDir() {
+		return cwd
+	}
+	if home != "" {
+		return home
+	}
+	return "/"
+}
+
 func NewSessionServer(claudeHome string) *SessionServer {
 	st, err := NewAgentSessionStore("")
 	if err != nil {
@@ -140,6 +158,10 @@ func (s *SessionServer) resolveJSONLPath(clientID string) (jsonlPath, canonicalI
 	}
 
 	if rec != nil {
+		s.recoverStoredLink(rec)
+		if s.agentStore != nil {
+			rec = s.agentStore.Get(clientID)
+		}
 		if rec.Agent != "" {
 			agent = rec.Agent
 		}
@@ -503,10 +525,7 @@ func (s *SessionServer) CreateSession(c *gin.Context) {
 		return
 	}
 
-	if req.Cwd == "" {
-		home, _ := os.UserHomeDir()
-		req.Cwd = home
-	}
+	req.Cwd = normalizeSessionCwd(req.Cwd)
 	if req.Mode == "" {
 		req.Mode = "chat"
 	}
@@ -781,6 +800,11 @@ func runAgentTaskSendResult(agent, cwd, text string, agentEnv map[string]string,
 		log.Printf("%s task send [%s] failed: %v (output: %s)", agent, logCtx, err, outStr)
 		return "", fmt.Errorf("%w: %s", err, outStr)
 	}
+	if normalizeRequestedAgent(agent, model) == "kimi-cli" {
+		if cleaned := kimiCleanPrintOutput(outStr); cleaned != "" {
+			outStr = cleaned
+		}
+	}
 	log.Printf("%s task send [%s] ok (bytes=%d)", agent, logCtx, len(outStr))
 	return outStr, nil
 }
@@ -858,6 +882,126 @@ func (s *SessionServer) appendStoredLocalTranscript(rec *StoredAgentSession, use
 		return
 	}
 	rec.Status = "running"
+	_ = s.agentStore.Upsert(rec)
+}
+
+func (s *SessionServer) recoverKimiLink(cwd string, startedAt int64) (externalID, historyPath string) {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" || strings.TrimSpace(cwd) == "" {
+		return "", ""
+	}
+	cwdMap := loadKimiSessionDirToCwd(home)
+	cutoff := startedAt - int64((2 * time.Minute).Milliseconds())
+	var bestMod int64
+	for key, mappedCwd := range cwdMap {
+		if mappedCwd != cwd {
+			continue
+		}
+		root := filepath.Join(home, ".kimi", "sessions", key)
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			ctxPath := filepath.Join(root, e.Name(), "context.jsonl")
+			st, err := os.Stat(ctxPath)
+			if err != nil || st.IsDir() {
+				continue
+			}
+			mod := st.ModTime().UnixMilli()
+			if startedAt > 0 && mod < cutoff {
+				continue
+			}
+			if mod >= bestMod {
+				bestMod = mod
+				externalID = "kimi-" + e.Name()
+				historyPath = ctxPath
+			}
+		}
+	}
+	return externalID, historyPath
+}
+
+func (s *SessionServer) recoverClaudeLink(cwd string, startedAt int64) (sessionID, historyPath string) {
+	if strings.TrimSpace(cwd) == "" {
+		return "", ""
+	}
+	sessDir := filepath.Join(s.claudeHome, "sessions")
+	entries, err := os.ReadDir(sessDir)
+	if err != nil {
+		return "", ""
+	}
+	cutoff := startedAt - int64((2 * time.Minute).Milliseconds())
+	var bestStarted int64
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(sessDir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var meta SessionMeta
+		if err := json.Unmarshal(data, &meta); err != nil {
+			continue
+		}
+		if meta.Cwd != cwd || strings.TrimSpace(meta.SessionID) == "" {
+			continue
+		}
+		candidateStarted := meta.StartedAt
+		if candidateStarted == 0 {
+			if st, err := os.Stat(path); err == nil {
+				candidateStarted = st.ModTime().UnixMilli()
+			}
+		}
+		if startedAt > 0 && candidateStarted < cutoff {
+			continue
+		}
+		jsonlPath := s.findSessionJSONL(meta.SessionID)
+		if jsonlPath == "" {
+			continue
+		}
+		if candidateStarted >= bestStarted {
+			bestStarted = candidateStarted
+			sessionID = meta.SessionID
+			historyPath = jsonlPath
+		}
+	}
+	return sessionID, historyPath
+}
+
+func (s *SessionServer) recoverStoredLink(rec *StoredAgentSession) {
+	if s.agentStore == nil || rec == nil {
+		return
+	}
+	switch rec.Agent {
+	case "kimi-cli":
+		if rec.ExternalID != "" && rec.HistoryPath != "" {
+			return
+		}
+		ext, hist := s.recoverKimiLink(rec.Cwd, rec.StartedAt)
+		if ext == "" || hist == "" {
+			return
+		}
+		rec.ExternalID = ext
+		rec.HistoryPath = hist
+	case "claude-code":
+		if rec.ClaudeSessionID != "" && rec.HistoryPath != "" {
+			return
+		}
+		sid, hist := s.recoverClaudeLink(rec.Cwd, rec.StartedAt)
+		if sid == "" || hist == "" {
+			return
+		}
+		rec.ClaudeSessionID = sid
+		rec.HistoryPath = hist
+	default:
+		return
+	}
 	_ = s.agentStore.Upsert(rec)
 }
 
@@ -1023,6 +1167,7 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 		if rec != nil {
 			cwd = rec.Cwd
 		}
+		cwd = normalizeSessionCwd(cwd)
 
 		isKimi := agentName == "kimi-cli" || strings.HasPrefix(id, "kimi-") || strings.HasPrefix(canon, "kimi-")
 		if isKimi {
@@ -1036,9 +1181,19 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 				uuid = kimiAPIID(rec.ExternalID)
 			}
 			if uuid == "" {
-				c.JSON(409, gin.H{"error": "kimi session not linked yet; wait a few seconds and retry", "diagnostics": gin.H{
-					"historyLinked": jsonlPath != "",
-				}})
+				agentEnv := mergeAgentEnvPreferred(req.AgentEnv, nil)
+				answer, err := runAgentTaskSendResult("kimi-cli", cwd, req.Text, agentEnv, req.Model, "unlinked-fallback")
+				if err != nil {
+					c.JSON(409, gin.H{"error": "kimi session not linked yet; wait a few seconds and retry", "diagnostics": gin.H{
+						"historyLinked": jsonlPath != "",
+						"fallbackError": err.Error(),
+					}})
+					return
+				}
+				if rec != nil && strings.HasPrefix(id, "cd-") {
+					s.appendStoredLocalTranscript(rec, req.Text, answer, req.Model)
+				}
+				c.JSON(200, gin.H{"ok": true, "assistant": answer, "fallbackTask": true})
 				return
 			}
 			if cwd == "" {
@@ -1084,7 +1239,15 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 			jsonlPath = s.findSessionJSONL(id)
 		}
 		if jsonlPath == "" {
-			c.JSON(404, gin.H{"error": "session not found"})
+			answer, err := runAgentTaskSendResult("claude-code", cwd, req.Text, req.AgentEnv, req.Model, "unlinked-fallback")
+			if err != nil {
+				c.JSON(404, gin.H{"error": "session not found", "fallbackError": err.Error()})
+				return
+			}
+			if rec != nil && strings.HasPrefix(id, "cd-") {
+				s.appendStoredLocalTranscript(rec, req.Text, answer, req.Model)
+			}
+			c.JSON(200, gin.H{"ok": true, "assistant": answer, "fallbackTask": true})
 			return
 		}
 		if rec != nil && rec.ClaudeSessionID != "" {
@@ -1123,6 +1286,17 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 	// Kimi (managed, linked): interactive tmux often misses multi-byte / pasted input via send-keys.
 	// Use the same one-shot API as the unlinked path — updates context.jsonl Kimi already uses.
 	if managedAgent == "kimi-cli" {
+		if strings.TrimSpace(ts.KimiSession) == "" {
+			if s.agentStore != nil {
+				if rec := s.agentStore.Get(id); rec != nil {
+					s.recoverStoredLink(rec)
+					if rec2 := s.agentStore.Get(id); rec2 != nil && strings.TrimSpace(rec2.ExternalID) != "" {
+						ts.KimiSession = rec2.ExternalID
+						ts.HistoryPath = rec2.HistoryPath
+					}
+				}
+			}
+		}
 		if strings.TrimSpace(ts.KimiSession) == "" {
 			for i := 0; i < 30; i++ {
 				time.Sleep(500 * time.Millisecond)
@@ -1182,6 +1356,17 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 	}
 
 	if managedAgent == "claude-code" {
+		if strings.TrimSpace(ts.ClaudeSession) == "" {
+			if s.agentStore != nil {
+				if rec := s.agentStore.Get(id); rec != nil {
+					s.recoverStoredLink(rec)
+					if rec2 := s.agentStore.Get(id); rec2 != nil && strings.TrimSpace(rec2.ClaudeSessionID) != "" {
+						ts.ClaudeSession = rec2.ClaudeSessionID
+						ts.HistoryPath = rec2.HistoryPath
+					}
+				}
+			}
+		}
 		if strings.TrimSpace(ts.ClaudeSession) == "" {
 			for i := 0; i < 20; i++ {
 				time.Sleep(500 * time.Millisecond)

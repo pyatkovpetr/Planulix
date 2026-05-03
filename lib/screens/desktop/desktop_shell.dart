@@ -127,7 +127,7 @@ class _DesktopShellState extends State<DesktopShell> {
   }
 
   void _openTerminal([String? cwd]) {
-    final terminalCwd = cwd ?? _projectPath ?? '/home/claude';
+    final terminalCwd = cwd ?? _projectPath ?? '/root';
     final tabId = 'terminal:${DateTime.now().millisecondsSinceEpoch}';
     final name =
         terminalCwd.split('/').where((s) => s.isNotEmpty).lastOrNull ?? 'shell';
@@ -1075,10 +1075,7 @@ class _DesktopShellState extends State<DesktopShell> {
         final file = rest.substring(sepIdx + 1);
         return DiffViewer(key: ValueKey(tab.id), cwd: cwd, file: file);
       case TabType.terminal:
-        return TerminalPanel(
-          key: ValueKey(tab.id),
-          cwd: tab.cwd ?? '/home/claude',
-        );
+        return TerminalPanel(key: ValueKey(tab.id), cwd: tab.cwd ?? '/root');
     }
   }
 
@@ -1257,7 +1254,7 @@ class _DesktopShellState extends State<DesktopShell> {
 
   void _showCreateDialog(AppState state) {
     final nameController = TextEditingController();
-    final cwdController = TextEditingController(text: '/home/claude');
+    final cwdController = TextEditingController(text: '/root');
     final promptController = TextEditingController();
     String selectedMode = 'task';
 
