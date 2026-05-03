@@ -66,6 +66,10 @@ class _DesktopShellState extends State<DesktopShell> {
     final state = context.read<AppState>();
     await state.refreshSessions();
     if (!mounted || !state.isConfigured) return;
+    final ws = state.workspacePath;
+    if (ws != null && ws.isNotEmpty) {
+      setState(() => _projectPath = ws);
+    }
     if (!state.welcomeOnboardingDone) {
       await Navigator.of(context).push<void>(
         MaterialPageRoute<void>(
@@ -268,6 +272,7 @@ class _DesktopShellState extends State<DesktopShell> {
       builder: (_) => const ProjectPicker(),
     );
     if (result != null && mounted) {
+      await context.read<AppState>().setWorkspacePath(result);
       setState(() {
         _projectPath = result;
         _activityBarIndex = 0;
@@ -1254,7 +1259,14 @@ class _DesktopShellState extends State<DesktopShell> {
 
   void _showCreateDialog(AppState state) {
     final nameController = TextEditingController();
-    final cwdController = TextEditingController(text: '/root');
+    final cwdDefault =
+        ((_projectPath != null && _projectPath!.trim().isNotEmpty))
+        ? _projectPath!.trim()
+        : (state.workspacePath != null &&
+              state.workspacePath!.trim().isNotEmpty)
+        ? state.workspacePath!.trim()
+        : '/root';
+    final cwdController = TextEditingController(text: cwdDefault);
     final promptController = TextEditingController();
     String selectedMode = 'task';
 

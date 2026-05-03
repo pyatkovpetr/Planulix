@@ -289,6 +289,13 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 		if clBin == "" {
 			return "", "", fmt.Errorf("claude CLI not found on server (install Claude Code or set PLANULIX_CLAUDE_BIN)")
 		}
+		cdTo := strings.TrimSpace(cwd)
+		if cdTo == "" {
+			cdTo = claudeSubprocessHome()
+			if cdTo == "" {
+				cdTo = "/"
+			}
+		}
 		modelFlag := ""
 		if model != "" {
 			modelFlag = fmt.Sprintf(" --model %s", model)
@@ -303,9 +310,9 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 			if prompt == "" {
 				return "", "", fmt.Errorf("prompt is required for task mode")
 			}
-			return fmt.Sprintf("%s%s%s -p %q", q, permissionFlag, modelFlag, prompt), env, nil
+			return fmt.Sprintf("cd %q && %s%s%s -p %q", cdTo, q, permissionFlag, modelFlag, prompt), env, nil
 		}
-		return fmt.Sprintf("%s%s%s", q, permissionFlag, modelFlag), env, nil
+		return fmt.Sprintf("cd %q && %s%s%s", cdTo, q, permissionFlag, modelFlag), env, nil
 	}
 }
 

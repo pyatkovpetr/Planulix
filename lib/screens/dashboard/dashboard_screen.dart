@@ -1240,9 +1240,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _showCreateDialog(AppState state) {
     final nameController = TextEditingController();
-    final isKimiScope = state.agentScope == 'Kimi';
     final isAllScope = state.agentScope == 'All';
-    final defaultCwd = isKimiScope ? '/root' : '/root';
+    final ws = state.workspacePath?.trim();
+    final defaultCwd = (ws != null && ws.isNotEmpty) ? ws : '/root';
     final cwdController = TextEditingController(text: defaultCwd);
     final promptController = TextEditingController();
     String selectedMode = 'chat';

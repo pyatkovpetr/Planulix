@@ -49,6 +49,9 @@ class AppState extends ChangeNotifier {
   /// Cached per-session total USD from GET /sessions/:id/cost (null = unknown / error).
   final Map<String, double?> sessionCostUsd = {};
 
+  /// Last workspace opened in Desktop explorer (sessions default cwd).
+  String? workspacePath;
+
   /// Keys from platform.moonshot.ai need `.ai` API host; `.cn` for China console.
   bool moonshotInternational = true;
 
@@ -63,6 +66,7 @@ class AppState extends ChangeNotifier {
   static const _kWelcomeOnboardingDone = 'welcomeOnboardingDone';
   static const _kAgentKeys = 'agentApiKeysJson';
   static const _kMoonshotIntl = 'moonshotInternational';
+  static const _kWorkspacePath = 'workspacePath';
   static const _listOnlyFilters = {'Starred', 'Active', 'Finished'};
 
   Future<void> init() async {
@@ -137,6 +141,10 @@ class AppState extends ChangeNotifier {
 
     moonshotInternational = prefs.getBool(_kMoonshotIntl) ?? true;
 
+    workspacePath = prefs.getString(_kWorkspacePath);
+    final ws = workspacePath?.trim();
+    workspacePath = (ws != null && ws.isNotEmpty) ? ws : null;
+
     // Older builds: strip legacy Planulix Cloud prefs.
     await prefs.remove('connectionMode');
     await prefs.remove('saasBaseUrl');
@@ -147,6 +155,18 @@ class AppState extends ChangeNotifier {
     moonshotInternational = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kMoonshotIntl, value);
+    notifyListeners();
+  }
+
+  Future<void> setWorkspacePath(String? path) async {
+    final t = path?.trim();
+    workspacePath = (t != null && t.isNotEmpty) ? t : null;
+    final prefs = await SharedPreferences.getInstance();
+    if (workspacePath == null) {
+      await prefs.remove(_kWorkspacePath);
+    } else {
+      await prefs.setString(_kWorkspacePath, workspacePath!);
+    }
     notifyListeners();
   }
 
