@@ -530,15 +530,21 @@ class ApiClient {
   }
 
   /// Установка Claude Code на gateway (может выполняться долго).
-  Future<Map<String, dynamic>> setupClaudeCodeInstall() async {
-    return setupAgentInstall('claude-code');
+  Future<Map<String, dynamic>> setupClaudeCodeInstall({
+    bool force = false,
+  }) async {
+    return setupAgentInstall('claude-code', force: force);
   }
 
-  Future<Map<String, dynamic>> setupAgentInstall(String agentId) async {
+  Future<Map<String, dynamic>> setupAgentInstall(
+    String agentId, {
+    bool force = false,
+  }) async {
     try {
       final res = await _dio.post(
         '/setup/agents/${Uri.encodeComponent(agentId)}'
         '/install',
+        queryParameters: force ? {'force': '1'} : null,
         options: Options(receiveTimeout: const Duration(minutes: 10)),
       );
       return Map<String, dynamic>.from(res.data as Map? ?? {});
@@ -548,6 +554,7 @@ class ApiClient {
         if (agentId == 'claude-code') {
           final res = await _dio.post(
             '/setup/claude-code/install',
+            queryParameters: force ? {'force': '1'} : null,
             options: Options(receiveTimeout: const Duration(minutes: 10)),
           );
           return Map<String, dynamic>.from(res.data as Map? ?? {});

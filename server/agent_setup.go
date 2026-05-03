@@ -72,7 +72,8 @@ func agentSetupSpecs() map[string]agentSetupSpec {
 			Label:   "Kimi Code",
 			Command: "kimi",
 			InstallBody: `set -euo pipefail
-if command -v kimi >/dev/null 2>&1; then kimi --version || true; exit 0; fi
+FORCE="${PLANULIX_AGENT_FORCE_UPDATE:-0}"
+if [ "$FORCE" != "1" ] && command -v kimi >/dev/null 2>&1; then kimi --version || true; exit 0; fi
 if command -v curl >/dev/null 2>&1; then
   curl -LsSf https://code.kimi.com/install.sh | bash
 elif command -v uv >/dev/null 2>&1; then
@@ -91,7 +92,8 @@ kimi --version 2>/dev/null || true`,
 			Label:   "Codex CLI",
 			Command: "codex",
 			InstallBody: `set -euo pipefail
-if command -v codex >/dev/null 2>&1; then codex --version || true; exit 0; fi
+FORCE="${PLANULIX_AGENT_FORCE_UPDATE:-0}"
+if [ "$FORCE" != "1" ] && command -v codex >/dev/null 2>&1; then codex --version || true; exit 0; fi
 if ! command -v npm >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
@@ -116,7 +118,8 @@ codex --version 2>/dev/null || true`,
 			Label:   "Cursor CLI",
 			Command: "agent",
 			InstallBody: `set -euo pipefail
-if command -v agent >/dev/null 2>&1; then agent --version || true; exit 0; fi
+FORCE="${PLANULIX_AGENT_FORCE_UPDATE:-0}"
+if [ "$FORCE" != "1" ] && command -v agent >/dev/null 2>&1; then agent --version || true; exit 0; fi
 curl https://cursor.com/install -fsS | bash
 export PATH="$HOME/.local/bin:$PATH"
 command -v agent >/dev/null 2>&1
@@ -128,7 +131,8 @@ agent --version 2>/dev/null || true`,
 			Label:   "OpenCode",
 			Command: "opencode",
 			InstallBody: `set -euo pipefail
-if command -v opencode >/dev/null 2>&1; then opencode --version || true; exit 0; fi
+FORCE="${PLANULIX_AGENT_FORCE_UPDATE:-0}"
+if [ "$FORCE" != "1" ] && command -v opencode >/dev/null 2>&1; then opencode --version || true; exit 0; fi
 if command -v curl >/dev/null 2>&1; then
   curl -fsSL https://opencode.ai/install | bash
 elif command -v npm >/dev/null 2>&1; then
@@ -147,7 +151,8 @@ opencode --version 2>/dev/null || true`,
 			Label:   "Kiro CLI",
 			Command: "kiro-cli",
 			InstallBody: `set -euo pipefail
-if command -v kiro-cli >/dev/null 2>&1 || command -v kiro >/dev/null 2>&1; then
+FORCE="${PLANULIX_AGENT_FORCE_UPDATE:-0}"
+if [ "$FORCE" != "1" ] && (command -v kiro-cli >/dev/null 2>&1 || command -v kiro >/dev/null 2>&1); then
   (kiro-cli --version || kiro --version || true) 2>/dev/null
   exit 0
 fi
@@ -179,7 +184,8 @@ func (s *SessionServer) InstallAgentCLI(c *gin.Context) {
 		c.JSON(400, gin.H{"ok": false, "error": "unsupported agent: " + id})
 		return
 	}
-	if p := resolveAgentCommand(spec.ID); p != "" {
+	force := c.Query("force") == "1" || strings.EqualFold(c.Query("force"), "true")
+	if p := resolveAgentCommand(spec.ID); p != "" && !force {
 		c.JSON(200, gin.H{"ok": true, "alreadyInstalled": true, "command": p, "log": fmt.Sprintf("%s already installed: %s", spec.Label, p), "notes": spec.Notes})
 		return
 	}
@@ -188,6 +194,7 @@ func (s *SessionServer) InstallAgentCLI(c *gin.Context) {
 	cmd := exec.CommandContext(ctx, "bash", "-lc", spec.InstallBody)
 	cmd.Env = append(os.Environ(),
 		"DEBIAN_FRONTEND=noninteractive",
+		fmt.Sprintf("PLANULIX_AGENT_FORCE_UPDATE=%d", map[bool]int{true: 1, false: 0}[force]),
 		"PATH="+augmentPathFront(claudeSubprocessHome(), os.Getenv("PATH"), "/usr/local/bin", "/usr/bin", "/bin", "/root/.local/bin"),
 	)
 	out, err := cmd.CombinedOutput()
@@ -203,6 +210,7 @@ func (s *SessionServer) InstallAgentCLI(c *gin.Context) {
 		"log":       logStr,
 		"notes":     spec.Notes,
 		"installed": installedPath != "",
+		"updated":   force,
 	}
 	if err != nil {
 		payload["error"] = err.Error()

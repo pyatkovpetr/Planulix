@@ -41,6 +41,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// Установка CLI на gateway через `POST /setup/agents/:id/install`.
   final Set<String> _installingAgents = <String>{};
+  bool _refreshingAgentCaps = false;
+  Timer? _agentCapsPollTimer;
 
   /// Подсказки на экране подключения: Tailscale (клиент) vs SSH-install gateway на VPS.
   bool _connectViaTailscale = true;
@@ -76,6 +78,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       unawaited(context.read<AppState>().loadCapabilitiesIfNeeded());
     });
+    _agentCapsPollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!mounted) return;
+      final state = context.read<AppState>();
+      if (state.api.isConfigured) {
+        unawaited(state.loadCapabilitiesIfNeeded());
+      }
+    });
   }
 
   @override
@@ -87,6 +96,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _kimiKeyController.dispose();
     _anthropicKeyController.dispose();
     _openaiKeyController.dispose();
+    _agentCapsPollTimer?.cancel();
     super.dispose();
   }
 
@@ -149,10 +159,12 @@ curl -fsSL $_kPlanulixInstallScript \\
     final nameC = TextEditingController(text: 'VPS');
     final urlC = TextEditingController(text: _urlController.text);
     final tokC = TextEditingController(text: _tokenController.text);
-    final sshUserC =
-        TextEditingController(text: _gatewaySshUserController.text.trim());
-    final sshPortC =
-        TextEditingController(text: _gatewaySshPortController.text.trim());
+    final sshUserC = TextEditingController(
+      text: _gatewaySshUserController.text.trim(),
+    );
+    final sshPortC = TextEditingController(
+      text: _gatewaySshPortController.text.trim(),
+    );
 
     final ok = await showDialog<bool>(
       context: context,
@@ -697,7 +709,11 @@ curl -fsSL $_kPlanulixInstallScript \\
           const SizedBox(height: 4),
           const Text(
             'Для «Remote Browser» и OAuth через IP VPS (SOCKS на тот же хост, что в Server URL): пользователь SSH и порт. Пустой пользователь = root.',
-            style: TextStyle(fontSize: 11, color: Color(0xFF64748b), height: 1.35),
+            style: TextStyle(
+              fontSize: 11,
+              color: Color(0xFF64748b),
+              height: 1.35,
+            ),
           ),
           const SizedBox(height: 10),
           TextField(
@@ -1008,17 +1024,52 @@ curl -fsSL $_kPlanulixInstallScript \\
             ),
           ),
           const SizedBox(height: 6),
-          const Text(
-            'Planulix видит сессии из файлов конкретных CLI. Если агент выбран в Switch agent, но чат не стартует — сначала поставьте его CLI на ту же машину, где работает gateway.',
-            style: TextStyle(fontSize: 12, height: 1.35, color: Color(0xFF94a3b8)),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Expanded(
+                child: Text(
+                  'Planulix видит сессии из файлов конкретных CLI. Если агент выбран в Switch agent, но чат не стартует — сначала поставьте его CLI на ту же машину, где работает gateway. Gateway обновляется отдельно; CLI-агентов можно обновлять ниже.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.35,
+                    color: Color(0xFF94a3b8),
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Обновить статусы и версии',
+                onPressed: _refreshingAgentCaps
+                    ? null
+                    : () async {
+                        setState(() => _refreshingAgentCaps = true);
+                        await state.loadCapabilitiesIfNeeded();
+                        if (mounted) {
+                          setState(() => _refreshingAgentCaps = false);
+                        }
+                      },
+                icon: _refreshingAgentCaps
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh, size: 20),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           ...entries.map((e) {
             final setupId = setupAgentIdForScope(e.id);
+            final cap = agentCapabilityFromCapabilities(
+              state.capabilitiesSnapshot,
+              setupId,
+            );
             final installed = agentInstalledFromCapabilities(
               state.capabilitiesSnapshot,
               setupId,
             );
+            final version = '${cap?['version'] ?? ''}'.trim();
             final installing = _installingAgents.contains(setupId);
             return Padding(
               padding: const EdgeInsets.only(bottom: 10),
@@ -1061,6 +1112,17 @@ curl -fsSL $_kPlanulixInstallScript \\
                       ],
                     ),
                     const SizedBox(height: 6),
+                    if (version.isNotEmpty) ...[
+                      Text(
+                        'Версия на сервере: $version',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          color: Color(0xFF22c55e),
+                          height: 1.3,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                    ],
                     Text(
                       _agentInstallNote(e.id),
                       style: const TextStyle(
@@ -1069,22 +1131,25 @@ curl -fsSL $_kPlanulixInstallScript \\
                         color: Color(0xFF94a3b8),
                       ),
                     ),
+                    const SizedBox(height: 10),
                     if (!installed) ...[
-                      const SizedBox(height: 10),
                       FilledButton.icon(
                         onPressed: installing
                             ? null
                             : () => _installAgentCliFromServer(
-                                  context,
-                                  state,
-                                  setupId,
-                                  e.title,
-                                ),
+                                context,
+                                state,
+                                setupId,
+                                e.title,
+                                force: false,
+                              ),
                         icon: installing
                             ? const SizedBox(
                                 width: 18,
                                 height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               )
                             : const Icon(Icons.downloading_outlined, size: 20),
                         style: FilledButton.styleFrom(
@@ -1094,6 +1159,36 @@ curl -fsSL $_kPlanulixInstallScript \\
                           installing
                               ? 'Установка на сервере…'
                               : 'Установить ${e.title} на сервер',
+                        ),
+                      ),
+                    ] else ...[
+                      OutlinedButton.icon(
+                        onPressed: installing
+                            ? null
+                            : () => _installAgentCliFromServer(
+                                context,
+                                state,
+                                setupId,
+                                e.title,
+                                force: true,
+                              ),
+                        icon: installing
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.upgrade_outlined, size: 20),
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(color: e.accent.withAlpha(180)),
+                          foregroundColor: e.accent,
+                        ),
+                        label: Text(
+                          installing
+                              ? 'Обновление на сервере…'
+                              : 'Обновить / переустановить ${e.title}',
                         ),
                       ),
                     ],
@@ -1130,14 +1225,15 @@ curl -fsSL $_kPlanulixInstallScript \\
     BuildContext context,
     AppState state,
     String agentId,
-    String label,
-  ) async {
+    String label, {
+    bool force = false,
+  }) async {
     if (_installingAgents.contains(agentId)) return;
     setState(() => _installingAgents.add(agentId));
     Map<String, dynamic>? res;
     Object? thrown;
     try {
-      res = await state.api.setupAgentInstall(agentId);
+      res = await state.api.setupAgentInstall(agentId, force: force);
     } catch (e, st) {
       thrown = e;
       debugPrint('setupAgentInstall($agentId) $e\n$st');
@@ -1149,9 +1245,9 @@ curl -fsSL $_kPlanulixInstallScript \\
     if (!context.mounted) return;
 
     if (thrown != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Сеть/API: $thrown')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Сеть/API: $thrown')));
       return;
     }
 
@@ -1167,7 +1263,9 @@ curl -fsSL $_kPlanulixInstallScript \\
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1e293b),
         title: Text(
-          ok ? '$label установлен' : 'Установка не удалась полностью',
+          ok
+              ? (force ? '$label обновлён' : '$label установлен')
+              : 'Установка не удалась полностью',
           style: const TextStyle(color: Color(0xFFf1f5f9), fontSize: 18),
         ),
         content: SingleChildScrollView(
@@ -1241,7 +1339,9 @@ curl -fsSL $_kPlanulixInstallScript \\
                 await Clipboard.setData(ClipboardData(text: updateCommand));
                 if (ctx.mounted) {
                   ScaffoldMessenger.of(ctx).showSnackBar(
-                    const SnackBar(content: Text('Команда обновления скопирована')),
+                    const SnackBar(
+                      content: Text('Команда обновления скопирована'),
+                    ),
                   );
                 }
               },
@@ -1260,7 +1360,9 @@ curl -fsSL $_kPlanulixInstallScript \\
       SnackBar(
         content: Text(
           ok
-              ? 'Готово. При необходимости сохраните API key/login для $label и обновите сессии.'
+              ? (force
+                    ? 'Готово. Версия $label обновлена/переустановлена, статус перечитан с сервера.'
+                    : 'Готово. При необходимости сохраните API key/login для $label и обновите сессии.')
               : 'Смотрите лог в диалоге или ставьте CLI вручную по SSH.',
         ),
       ),

@@ -4,7 +4,9 @@ set -euo pipefail
 
 log() { printf '[planulix claude-setup] %s\n' "$*"; }
 
-if command -v claude >/dev/null 2>&1; then
+FORCE="${PLANULIX_AGENT_FORCE_UPDATE:-0}"
+
+if [ "$FORCE" != "1" ] && command -v claude >/dev/null 2>&1; then
   log "already installed: $(command -v claude)"
   claude --version 2>/dev/null | head -n1 || true
   exit 0
