@@ -161,6 +161,16 @@ func normalizeRequestedAgent(agent, model string) string {
 	}
 }
 
+func modelFlagValue(model string) string {
+	model = strings.TrimSpace(model)
+	switch model {
+	case "", "provider-default", "cursor-default", "kiro-default", "opencode-default":
+		return ""
+	default:
+		return model
+	}
+}
+
 func agentTmuxPrefix(agent string) string {
 	switch normalizeRequestedAgent(agent, "") {
 	case "kimi-cli":
@@ -183,7 +193,7 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 	switch normalizeRequestedAgent(agent, model) {
 	case "kimi-cli":
 		modelFlag := ""
-		if m := strings.TrimSpace(model); m != "" {
+		if m := modelFlagValue(model); m != "" {
 			modelFlag = fmt.Sprintf(" -m %q", m)
 		}
 		base := fmt.Sprintf("%s -w %q -y%s", kimiBinDefault, cwd, modelFlag)
@@ -202,7 +212,7 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 		}
 		env = genericAgentExports(agentEnv)
 		modelFlag := ""
-		if m := strings.TrimSpace(model); m != "" {
+		if m := modelFlagValue(model); m != "" {
 			modelFlag = fmt.Sprintf(" --model %q", m)
 		}
 		q := strconv.Quote(bin)
@@ -220,7 +230,7 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 		}
 		env = genericAgentExports(agentEnv)
 		modelFlag := ""
-		if m := strings.TrimSpace(model); m != "" {
+		if m := modelFlagValue(model); m != "" {
 			modelFlag = fmt.Sprintf(" --model %q", m)
 		}
 		q := strconv.Quote(bin)
@@ -292,7 +302,7 @@ func buildClaudeResumeShell(cwd, claudeSessionID, text string, agentEnv map[stri
 	}
 	env := claudeExportsForShell(agentEnv)
 	modelFlag := ""
-	if m := strings.TrimSpace(model); m != "" {
+	if m := modelFlagValue(model); m != "" {
 		modelFlag = " --model " + m
 	}
 	permissionFlag := " --dangerously-skip-permissions"

@@ -1276,7 +1276,7 @@ class _SessionScreenState extends State<SessionScreen> {
             {'type': 'user', 'content': text, 'localOnly': true},
             {'type': 'assistant', 'content': assistant, 'localOnly': true},
           ]);
-          _sendStatus = 'Ответ получен напрямую от Kimi';
+          _sendStatus = 'Ответ получен напрямую от $_agentName';
         });
         _scrollToBottom();
       }

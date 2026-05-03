@@ -906,12 +906,15 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
         finalText = '$refs\n\n$text'.trim();
       }
 
-      // Create session if none exists
+      Map<String, dynamic>? sendResult;
+
+      // Create session if none exists, then always route the message through /message.
+      // Agent-specific send behavior (Kimi resume, Claude resume, Cursor headless) lives there.
       if (_sessionId == null) {
         final data = await state.api.createSession(
           cwd: widget.projectPath,
           mode: 'chat',
-          prompt: finalText,
+          prompt: null,
           model: modelId,
           agent: setupAgentIdForScope(state.agentScope).isEmpty
               ? null
@@ -932,16 +935,16 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
         _sessionId = id;
         await state.refreshSessions();
         _subscribeSessionEvents();
-      } else {
-        await state.api.sendMessage(
-          _sessionId!,
-          finalText,
-          agentEnv: state.agentEnvForServer(),
-          model: modelId,
-        );
       }
+      sendResult = await state.api.sendMessage(
+        _sessionId!,
+        finalText,
+        agentEnv: state.agentEnvForServer(),
+        model: modelId,
+      );
 
       if (!mounted) return;
+      final assistant = (sendResult['assistant'] ?? '').toString().trim();
       setState(() {
         _inputController.clear();
         _attachments.clear();
@@ -953,8 +956,15 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
             'type': 'user',
             'role': 'user',
             'content': finalText,
-            'pending': true,
+            'pending': assistant.isEmpty,
           },
+          if (assistant.isNotEmpty)
+            {
+              'type': 'assistant',
+              'role': 'assistant',
+              'content': assistant,
+              'localOnly': true,
+            },
         ];
       });
       _scrollToBottom(force: true);

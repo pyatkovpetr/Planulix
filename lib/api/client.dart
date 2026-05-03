@@ -34,6 +34,20 @@ class ApiClient {
     return null;
   }
 
+  String _dioErrorMessage(DioException e) {
+    final status = e.response?.statusCode;
+    final data = e.response?.data;
+    final body = data is Map
+        ? (data['error'] ?? data['message'] ?? data).toString()
+        : (data?.toString() ?? '');
+    final uri = e.requestOptions.uri.toString();
+    if (status != null && body.isNotEmpty) {
+      return 'HTTP $status $uri: $body';
+    }
+    if (status != null) return 'HTTP $status $uri';
+    return e.message ?? e.toString();
+  }
+
   /// Единый базовый URL для Dio и геттера [baseUrl] (prefs + dart-define).
   String _resolvedBaseUrl() {
     final raw = (_baseUrl != null && _baseUrl!.isNotEmpty)
@@ -182,8 +196,12 @@ class ApiClient {
       if (model != null && model.trim().isNotEmpty) 'model': model.trim(),
       if (agentEnv != null && agentEnv.isNotEmpty) 'agentEnv': agentEnv,
     };
-    final res = await _dio.post('/sessions/$sessionId/message', data: body);
-    return Map<String, dynamic>.from(res.data as Map? ?? {});
+    try {
+      final res = await _dio.post('/sessions/$sessionId/message', data: body);
+      return Map<String, dynamic>.from(res.data as Map? ?? {});
+    } on DioException catch (e) {
+      throw Exception(_dioErrorMessage(e));
+    }
   }
 
   Future<void> stopSession(String sessionId) async {

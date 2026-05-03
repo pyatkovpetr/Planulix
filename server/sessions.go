@@ -520,8 +520,9 @@ func (s *SessionServer) CreateSession(c *gin.Context) {
 
 	s.persistManaged(ts)
 
-	// For chat mode with initial prompt, send after Claude starts (Kimi: first line is sent via headless resume in linkKimiSession).
-	if req.Mode == "chat" && req.Prompt != "" && agent != "kimi-cli" {
+	// For chat mode with initial prompt, send after the CLI starts.
+	// Claude/Kimi use their resume APIs after linking; Cursor is sent through /message.
+	if req.Mode == "chat" && req.Prompt != "" && agent != "kimi-cli" && agent != "claude-code" && agent != "cursor" {
 		go func() {
 			wait := 5 * time.Second
 			time.Sleep(wait) // wait for CLI agent to fully init
@@ -629,16 +630,30 @@ func (s *SessionServer) linkClaudeSession(managedID, tmuxName, cwd string) {
 
 			// Check if this session matches our cwd
 			if meta.Cwd == cwd {
+				prompt := ""
+				model := ""
+				var env map[string]string
 				s.mu.Lock()
 				if ts, ok := s.tmuxSessions[managedID]; ok {
 					ts.ClaudeSession = meta.SessionID
 					if p := s.findSessionJSONL(meta.SessionID); p != "" {
 						ts.HistoryPath = p
 					}
+					prompt = strings.TrimSpace(ts.Prompt)
+					model = strings.TrimSpace(ts.Model)
+					env = mergeAgentEnvPreferred(ts.ResumeEnv, nil)
 					s.persistManaged(ts)
 				}
 				s.mu.Unlock()
 				log.Printf("Linked managed session %s -> Claude session %s", managedID, meta.SessionID)
+				if prompt != "" {
+					go func() {
+						cmd := exec.Command("bash", "-c", buildClaudeResumeShell(cwd, meta.SessionID, prompt, env, model))
+						if output, err := cmd.CombinedOutput(); err != nil {
+							log.Printf("Claude initial prompt resume failed for %s: %v (output: %s)", meta.SessionID, err, string(output))
+						}
+					}()
+				}
 				return
 			}
 		}
@@ -684,6 +699,29 @@ func (s *SessionServer) runKimiResumeSendResult(cwd, sessionUUID, text string, a
 	}
 	log.Printf("Kimi resume send [%s] ok for %s (bytes=%d clean_bytes=%d)", logCtx, sessionUUID, len(outStr), len(answer))
 	return answer, nil
+}
+
+func runAgentTaskSendResult(agent, cwd, text string, agentEnv map[string]string, model, logCtx string) (string, error) {
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("empty text")
+	}
+	if strings.TrimSpace(cwd) == "" {
+		home, _ := os.UserHomeDir()
+		cwd = home
+	}
+	cmdFrag, env, err := buildAgentCommand(agent, "task", cwd, text, model, agentEnv)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command("bash", "-c", fmt.Sprintf("%s && %s", env, cmdFrag))
+	output, err := cmd.CombinedOutput()
+	outStr := strings.TrimSpace(stripANSI(string(output)))
+	if err != nil {
+		log.Printf("%s task send [%s] failed: %v (output: %s)", agent, logCtx, err, outStr)
+		return "", fmt.Errorf("%w: %s", err, outStr)
+	}
+	log.Printf("%s task send [%s] ok (bytes=%d)", agent, logCtx, len(outStr))
+	return outStr, nil
 }
 
 // linkKimiSession watches ~/.kimi/sessions/<workdir-hash>/ for a new session dir with context.jsonl.
@@ -814,7 +852,14 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 		if s.agentStore != nil {
 			rec = s.agentStore.Get(id)
 		}
-		if rec != nil && strings.TrimSpace(rec.TmuxName) != "" {
+		if agentName == "" && rec != nil {
+			agentName = strings.TrimSpace(rec.Agent)
+		}
+		restoredAgent := ""
+		if rec != nil {
+			restoredAgent = strings.TrimSpace(rec.Agent)
+		}
+		if rec != nil && strings.TrimSpace(rec.TmuxName) != "" && restoredAgent != "cursor" && !(restoredAgent == "claude-code" && strings.TrimSpace(rec.ClaudeSessionID) != "") {
 			if exec.Command("tmux", "has-session", "-t", rec.TmuxName).Run() == nil {
 				if err := sendLiteralToTmux(rec.TmuxName, req.Text); err != nil {
 					c.JSON(500, gin.H{"error": fmt.Sprintf("failed to send to restored tmux session: %v", err)})
@@ -863,7 +908,20 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 			c.JSON(200, gin.H{"ok": true, "assistant": answer})
 			return
 		}
-		if agentName == "codex-cli" || agentName == "cursor" || agentName == "kiro-cli" || agentName == "opencode" {
+		if agentName == "cursor" {
+			if cwd == "" {
+				home, _ := os.UserHomeDir()
+				cwd = home
+			}
+			answer, err := runAgentTaskSendResult("cursor", cwd, req.Text, req.AgentEnv, req.Model, "unmanaged")
+			if err != nil {
+				c.JSON(502, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"ok": true, "assistant": answer})
+			return
+		}
+		if agentName == "codex-cli" || agentName == "kiro-cli" || agentName == "opencode" {
 			c.JSON(409, gin.H{"error": fmt.Sprintf("%s detached resume is not wired yet; open/create a live Planulix tmux session for this agent", agentName)})
 			return
 		}
@@ -928,6 +986,68 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 			return
 		}
 		c.JSON(200, gin.H{"ok": true, "assistant": answer})
+		return
+	}
+
+	if ts.Agent == "cursor" {
+		model := strings.TrimSpace(req.Model)
+		if model == "" {
+			model = ts.Model
+		}
+		answer, err := runAgentTaskSendResult("cursor", ts.Cwd, req.Text, req.AgentEnv, model, "managed-tmux")
+		if err != nil {
+			c.JSON(502, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"ok": true, "assistant": answer})
+		return
+	}
+
+	if ts.Agent == "claude-code" {
+		if strings.TrimSpace(ts.ClaudeSession) == "" {
+			for i := 0; i < 20; i++ {
+				time.Sleep(500 * time.Millisecond)
+				s.mu.RLock()
+				linked := ""
+				if latest, exists := s.tmuxSessions[id]; exists && latest != nil {
+					linked = strings.TrimSpace(latest.ClaudeSession)
+				}
+				s.mu.RUnlock()
+				if linked != "" {
+					ts.ClaudeSession = linked
+					break
+				}
+			}
+		}
+		if strings.TrimSpace(ts.ClaudeSession) == "" {
+			if err := sendLiteralToTmux(ts.Name, req.Text); err != nil {
+				c.JSON(500, gin.H{"error": fmt.Sprintf("failed to send: %v", err)})
+				return
+			}
+			c.JSON(200, gin.H{"ok": true, "pendingLink": true})
+			return
+		}
+		cwd := ts.Cwd
+		if cwd == "" {
+			cwd = s.findSessionCwd(ts.ClaudeSession)
+		}
+		if cwd == "" {
+			home, _ := os.UserHomeDir()
+			cwd = home
+		}
+		model := strings.TrimSpace(req.Model)
+		if model == "" {
+			model = ts.Model
+		}
+		go func(sessionID, cwd, text string, env map[string]string, m string) {
+			cmd := exec.Command("bash", "-c", buildClaudeResumeShell(cwd, sessionID, text, env, m))
+			if output, err := cmd.CombinedOutput(); err != nil {
+				log.Printf("Claude managed resume send failed for %s: %v (output: %s)", sessionID, err, string(output))
+			} else {
+				log.Printf("Claude managed resume send completed for %s", sessionID)
+			}
+		}(ts.ClaudeSession, cwd, req.Text, req.AgentEnv, model)
+		c.JSON(200, gin.H{"ok": true})
 		return
 	}
 
