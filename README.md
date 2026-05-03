@@ -6,6 +6,12 @@
 
 ![Полный интерфейс: проводник, редактор и чат](assets/readme/desktop-full-ide.png)
 
+### Поддержать автора
+
+Если Planulix оказался полезным — можно [**купить кофе автору на Boosty**](https://boosty.to/planulix):
+
+[![Купить кофе автору](https://img.shields.io/badge/Купить_кофе_автору-Boosty-ff5916?style=for-the-badge)](https://boosty.to/planulix)
+
 ---
 
 ## Что вы получаете
@@ -108,6 +114,7 @@ go build -o planulix-gateway .
 
 - **Issues и PR** — приветствуются.
 - Телеграм: [t.me/planulix](https://t.me/planulix)
+- Boosty (донаты / «кофе»): [boosty.to/planulix](https://boosty.to/planulix)
 
 ---
 
