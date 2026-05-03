@@ -25,29 +25,6 @@ class _CostScreenState extends State<CostScreen> {
       _error = null;
     });
     final state = context.read<AppState>();
-    if (state.connectionMode == 'saas' &&
-        state.saas.isConfigured &&
-        !state.api.isConfigured) {
-      try {
-        await state.refreshSaasWorkspaces();
-        if (mounted) {
-          setState(() {
-            _loading = false;
-            _data = _buildSaasCostPlaceholder(state);
-            _error = null;
-          });
-        }
-        return;
-      } catch (e) {
-        if (mounted) {
-          setState(() {
-            _error = e.toString();
-            _loading = false;
-          });
-        }
-        return;
-      }
-    }
     try {
       final data = await state.api.getCostSummary();
       if (mounted) {
@@ -64,27 +41,6 @@ class _CostScreenState extends State<CostScreen> {
         });
       }
     }
-  }
-
-  /// Minimal shape so existing summary widgets can render; SaaS has no Planulix session breakdown.
-  Map<String, dynamic> _buildSaasCostPlaceholder(AppState state) {
-    final u = state.saasUsage ?? {};
-    final used = (u['month_used_tokens'] as num?)?.toInt() ?? 0;
-    final budget = (u['monthly_token_budget'] as num?)?.toInt() ?? 0;
-    final mode = (u['kimi_mode'] ?? '').toString();
-    return {
-      'totalCost': 0.0,
-      'totalSessions': 0,
-      'usage': {'inputTokens': 0, 'outputTokens': 0, 'totalTokens': used},
-      'costByModel': <String, dynamic>{},
-      'costByProject': <String, dynamic>{
-        'saas': {'cost': 0.0, 'label': 'Planulix Cloud · $mode · budget $budget'},
-      },
-      'dailyCosts': <dynamic>[],
-      'topSessions': <dynamic>[],
-      '_saasNote':
-          'Данные со страницы Planulix Cloud (/v1/usage/summary). Детальный разбор по сессиям — в режиме Direct с вашим Planulix-сервером.',
-    };
   }
 
   @override
@@ -135,33 +91,6 @@ class _CostScreenState extends State<CostScreen> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          if (_data!['_saasNote'] != null) ...[
-            Card(
-              color: const Color(0xFF1e3a5f),
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Icon(Icons.info_outline, color: Color(0xFF38bdf8)),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        _data!['_saasNote'].toString(),
-                        style: const TextStyle(
-                          fontSize: 13,
-                          height: 1.35,
-                          color: Color(0xFFe2e8f0),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
-          // Summary cards
           _buildSummaryRow(totalCost, totalSessions, usage),
           const SizedBox(height: 20),
 

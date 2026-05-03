@@ -531,11 +531,6 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
             : '${scope == 'Kimi' ? 'Kimi' : 'Claude'} Chat';
         if (costMap != null) _sessionCost = costMap;
       });
-      if (costMap != null && _sessionId != null) {
-        final st = context.read<AppState>();
-        final prov = scope == 'Kimi' ? 'kimi' : 'claude';
-        unawaited(st.maybeReportSaasSessionUsage(_sessionId!, costMap, prov));
-      }
       _scrollToBottom();
     } catch (_) {}
   }

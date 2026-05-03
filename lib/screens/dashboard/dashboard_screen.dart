@@ -30,11 +30,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final s = context.read<AppState>();
-      if (s.connectionMode == 'saas') {
-        s.refreshSaasWorkspaces();
-      } else {
-        s.refreshSessions();
-      }
+      s.refreshSessions();
     });
   }
 
@@ -97,16 +93,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       body: RefreshIndicator(
         onRefresh: () async {
-          if (state.connectionMode == 'saas') {
-            await state.refreshSaasWorkspaces();
-          } else {
-            await state.refreshSessions(refetchCosts: true);
-          }
+          await state.refreshSessions(refetchCosts: true);
         },
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            if (state.connectionMode == 'saas') _buildSaasStrip(context, state),
             _buildAgentHero(state, sessions),
             const SizedBox(height: 12),
 
@@ -1550,95 +1541,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           );
         },
-      ),
-    );
-  }
-
-  Widget _buildSaasStrip(BuildContext context, AppState state) {
-    final me = state.saasMe;
-    final u = state.saasUsage;
-    return Card(
-      color: const Color(0xFF1e293b),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.cloud_outlined, color: Color(0xFF38bdf8)),
-                const SizedBox(width: 8),
-                Text(
-                  'Planulix Cloud · ${me?['tenant_name'] ?? 'workspaces'}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15,
-                  ),
-                ),
-              ],
-            ),
-            if (state.saasWorkspaces.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              const Text(
-                'Managed servers',
-                style: TextStyle(fontSize: 12, color: Color(0xFF94a3b8)),
-              ),
-              const SizedBox(height: 6),
-              ...state.saasWorkspaces.map(
-                (w) => Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(
-                    children: [
-                      Icon(
-                        w.online ? Icons.circle : Icons.circle_outlined,
-                        size: 12,
-                        color: w.online
-                            ? Colors.greenAccent
-                            : const Color(0xFF64748b),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          w.name,
-                          style: const TextStyle(fontSize: 14),
-                        ),
-                      ),
-                      Text(
-                        w.online ? 'online' : 'offline',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: w.online
-                              ? Colors.greenAccent
-                              : const Color(0xFF64748b),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-            if (u != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: Text(
-                  'Usage this month: ${u['month_used_tokens'] ?? 0} tokens · '
-                  'budget ${u['monthly_token_budget'] ?? 0} · mode ${u['kimi_mode'] ?? ''}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF94a3b8),
-                  ),
-                ),
-              ),
-            const SizedBox(height: 6),
-            Text(
-              'Подсказка: для чата по сессиям Kimi/Claude включите Direct и добавьте профиль Planulix (URL сервера + токен).',
-              style: TextStyle(
-                fontSize: 11,
-                color: Colors.white.withAlpha(150),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

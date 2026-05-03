@@ -6,23 +6,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../api/client.dart';
-import '../api/saas_client.dart';
 import '../models/server_profile.dart';
-import '../models/saas_workspace.dart';
 import '../utils/agent_catalog.dart';
 import '../utils/chat_models.dart';
 
 class AppState extends ChangeNotifier {
   final ApiClient api;
 
-  /// `direct` — Planulix API URL + token. `saas` — Planulix Cloud control plane (JWT).
-  String connectionMode = 'direct';
-
-  final SaasClient saas = SaasClient();
-
-  List<SaasWorkspace> saasWorkspaces = [];
-  Map<String, dynamic>? saasMe;
-  Map<String, dynamic>? saasUsage;
   List<dynamic> sessions = [];
   Map<String, dynamic>? currentSession;
   List<dynamic> currentMessages = [];
@@ -40,7 +30,7 @@ class AppState extends ChangeNotifier {
   /// First-launch agent picker on phone (skipped for upgraded installs).
   bool agentOnboardingDone = false;
 
-  /// First-run welcome: positioning (Kimi/Claude client) + Direct vs Planulix Cloud (shown once).
+  /// First-run welcome: Tailscale vs SSH paths + что дальше (shown once).
   bool welcomeOnboardingDone = false;
 
   List<ServerProfile> serverProfiles = [];
@@ -58,9 +48,6 @@ class AppState extends ChangeNotifier {
   /// Cached per-session total USD from GET /sessions/:id/cost (null = unknown / error).
   final Map<String, double?> sessionCostUsd = {};
 
-  /// Per-session cumulative tokens already sent to Planulix Cloud usage/batch (for delta reports).
-  final Map<String, int> saasReportedTokenTotals = {};
-
   /// Keys from platform.moonshot.ai need `.ai` API host; `.cn` for China console.
   bool moonshotInternational = true;
 
@@ -75,10 +62,6 @@ class AppState extends ChangeNotifier {
   static const _kWelcomeOnboardingDone = 'welcomeOnboardingDone';
   static const _kAgentKeys = 'agentApiKeysJson';
   static const _kMoonshotIntl = 'moonshotInternational';
-  static const _kConnectionMode = 'connectionMode';
-  static const _kSaasBaseUrl = 'saasBaseUrl';
-  static const _kSaasJwt = 'saasJwt';
-
   static const _listOnlyFilters = {'Starred', 'Active', 'Finished'};
 
   Future<void> init() async {
@@ -88,9 +71,7 @@ class AppState extends ChangeNotifier {
       await api.loadSettings();
       await _loadUserPrefs();
       await _migrateLegacyProfileIfNeeded();
-      if (connectionMode == 'saas' && saas.isConfigured) {
-        await refreshSaasWorkspaces();
-      } else if (api.isConfigured) {
+      if (api.isConfigured) {
         await refreshSessions();
         unawaited(loadCapabilitiesIfNeeded());
         unawaited(loadPricingIfNeeded());
@@ -155,130 +136,10 @@ class AppState extends ChangeNotifier {
 
     moonshotInternational = prefs.getBool(_kMoonshotIntl) ?? true;
 
-    connectionMode = prefs.getString(_kConnectionMode) ?? 'direct';
-    if (connectionMode != 'saas' && connectionMode != 'direct') {
-      connectionMode = 'direct';
-    }
-    final saasUrl = prefs.getString(_kSaasBaseUrl) ?? '';
-    final saasTok = prefs.getString(_kSaasJwt) ?? '';
-    saas.update(baseUrl: saasUrl, jwt: saasTok);
-  }
-
-  Future<void> setConnectionMode(String mode) async {
-    if (mode != 'saas' && mode != 'direct') return;
-    connectionMode = mode;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kConnectionMode, mode);
-    notifyListeners();
-    if (mode == 'saas') {
-      _pollTimer?.cancel();
-      if (saas.isConfigured) {
-        await refreshSaasWorkspaces();
-      }
-    } else if (mode == 'direct' && api.isConfigured) {
-      await refreshSessions();
-      unawaited(loadPricingIfNeeded());
-      _startPolling();
-    }
-  }
-
-  Future<void> persistSaasConnection({
-    required String baseUrl,
-    String? jwt,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kSaasBaseUrl, baseUrl.trim());
-    saas.update(baseUrl: baseUrl.trim());
-    if (jwt != null) {
-      await prefs.setString(_kSaasJwt, jwt);
-      saas.update(jwt: jwt);
-    }
-    notifyListeners();
-  }
-
-  Future<void> saasLogout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_kSaasJwt);
-    saas.update(jwt: '');
-    saasWorkspaces = [];
-    saasMe = null;
-    saasUsage = null;
-    notifyListeners();
-  }
-
-  Future<void> saasLogin(String email, String password) async {
-    final base = saas.baseUrl ?? '';
-    if (base.isEmpty) {
-      error = 'Set SaaS API URL first';
-      notifyListeners();
-      return;
-    }
-    final tmp = SaasClient(baseUrl: base);
-    final res = await tmp.login(email: email, password: password);
-    final token = res['access_token']?.toString();
-    if (token == null || token.isEmpty) {
-      error = res['error']?.toString() ?? 'login failed';
-      notifyListeners();
-      return;
-    }
-    await persistSaasConnection(baseUrl: base, jwt: token);
-    error = null;
-    await refreshSaasWorkspaces();
-  }
-
-  Future<void> refreshSaasWorkspaces() async {
-    if (!saas.isConfigured) return;
-    try {
-      saasMe = await saas.me();
-      saasUsage = await saas.usageSummary();
-      final raw = await saas.listServers();
-      saasWorkspaces = raw.map(SaasWorkspace.fromJson).toList();
-      lastRefreshed = DateTime.now();
-      error = null;
-      notifyListeners();
-    } catch (e) {
-      error = e.toString();
-      notifyListeners();
-    }
-  }
-
-  static int _usageInt(dynamic v) {
-    if (v == null) return 0;
-    if (v is int) return v;
-    if (v is double) return v.round();
-    return int.tryParse(v.toString()) ?? 0;
-  }
-
-  /// Reports token delta to Planulix Cloud when [connectionMode] is saas (platform budget vs client key via [saasMe] kimi_mode).
-  Future<void> maybeReportSaasSessionUsage(
-    String sessionId,
-    Map<String, dynamic> sessionCost,
-    String provider,
-  ) async {
-    if (connectionMode != 'saas' || !saas.isConfigured) return;
-    final usage = sessionCost['usage'];
-    if (usage is! Map) return;
-    final inTok = _usageInt(usage['inputTokens']);
-    final outTok = _usageInt(usage['outputTokens']);
-    final total = inTok + outTok;
-    final last = saasReportedTokenTotals[sessionId] ?? 0;
-    if (total <= last) return;
-    final delta = total - last;
-    saasReportedTokenTotals[sessionId] = total;
-    final mode = (saasMe?['kimi_mode'] ?? 'platform').toString();
-    try {
-      await saas.postUsageBatch([
-        {
-          'session_id': sessionId,
-          'provider': provider,
-          'input_tokens': 0,
-          'output_tokens': 0,
-          'total_tokens': delta,
-          'cost_usd': 0.0,
-          'billing_mode': mode,
-        },
-      ]);
-    } catch (_) {}
+    // Older builds: strip legacy Planulix Cloud prefs.
+    await prefs.remove('connectionMode');
+    await prefs.remove('saasBaseUrl');
+    await prefs.remove('saasJwt');
   }
 
   Future<void> setMoonshotInternational(bool value) async {
@@ -573,17 +434,9 @@ class AppState extends ChangeNotifier {
     await prefs.setString(_kActiveProfile, activeProfileId!);
   }
 
-  bool get isConfigured {
-    if (connectionMode == 'saas') {
-      return saas.isConfigured;
-    }
-    return api.isConfigured;
-  }
+  bool get isConfigured => api.isConfigured;
 
   Future<void> refreshSessions({bool refetchCosts = false}) async {
-    if (connectionMode == 'saas') {
-      return;
-    }
     try {
       if (refetchCosts) {
         sessionCostUsd.clear();

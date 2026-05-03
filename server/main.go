@@ -79,7 +79,7 @@ func (l *perIPRateLimiter) Allow(ip string) bool {
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "agent" {
-		RunSaasAgentWorker()
+		RunCloudGatewayAgentWorker()
 		return
 	}
 

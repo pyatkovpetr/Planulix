@@ -33,10 +33,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _keysTestResult;
   bool _agentKeysExpanded = false;
 
-  late TextEditingController _saasUrlController;
-  late TextEditingController _saasEmailController;
-  late TextEditingController _saasPasswordController;
-  bool _saasBusy = false;
+  /// Подсказки на экране подключения: Tailscale (клиент) vs SSH-сборка gateway на VPS.
+  bool _connectViaTailscale = true;
+
+  static const _kPlanulixUpstream =
+      'https://github.com/pyatkovpetr/Planulix.git';
 
   @override
   void initState() {
@@ -54,9 +55,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _openaiKeyController = TextEditingController(
       text: state.agentApiKeys['openai'] ?? '',
     );
-    _saasUrlController = TextEditingController(text: state.saas.baseUrl ?? '');
-    _saasEmailController = TextEditingController();
-    _saasPasswordController = TextEditingController();
   }
 
   @override
@@ -66,9 +64,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _kimiKeyController.dispose();
     _anthropicKeyController.dispose();
     _openaiKeyController.dispose();
-    _saasUrlController.dispose();
-    _saasEmailController.dispose();
-    _saasPasswordController.dispose();
     super.dispose();
   }
 
@@ -99,6 +94,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (Platform.isWindows) return 'https://tailscale.com/download/windows';
     if (Platform.isLinux) return 'https://tailscale.com/download/linux';
     return 'https://tailscale.com/download';
+  }
+
+  String _sshGatewaySetupCommands() {
+    return '''# На своём VPS (Linux) после SSH:
+ssh user@ваш-сервер-ip
+
+sudo apt update && sudo apt install -y golang-go git   # пример Debian/Ubuntu
+
+git clone $_kPlanulixUpstream planulix
+cd planulix/server
+
+export AUTH_TOKEN='замените-на-свой-секрет'
+go build -o planulix .
+
+AUTH_TOKEN="\$AUTH_TOKEN" ./planulix
+# Слушает порт 8990. В этом приложении Server URL → http://<IP_или_TS>:8990/api
+''';
   }
 
   Future<void> _showAddProfileDialog() async {
@@ -199,7 +211,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Text(
-                  'Установка агента на VPS',
+                  'Установка gateway на сервере',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
@@ -260,150 +272,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _saasAddServer(BuildContext context, AppState state) async {
-    final nameC = TextEditingController(text: 'VPS');
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1e293b),
-        title: const Text(
-          'Новый сервер (агент)',
-          style: TextStyle(color: Color(0xFFf1f5f9)),
-        ),
-        content: TextField(
-          controller: nameC,
-          style: const TextStyle(color: Color(0xFFe2e8f0)),
-          decoration: _dialogFieldDecoration('Имя (например Production)'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Отмена'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Создать'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !context.mounted) return;
-    setState(() => _saasBusy = true);
-    try {
-      final res = await state.saas.createServer(
-        name: nameC.text.trim().isEmpty ? 'VPS' : nameC.text.trim(),
-      );
-      await state.refreshSaasWorkspaces();
-      if (!context.mounted) return;
-      final err = res['error']?.toString();
-      if (err != null && err.isNotEmpty) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(err)));
-        return;
-      }
-      final cmd = res['install_command']?.toString();
-      if (cmd != null && cmd.isNotEmpty) {
-        await _showAgentInstallSheet(
-          context,
-          cmd,
-          subtitle:
-              'Одноразовая ссылка. После выполнения на сервере секрет агента обновится.',
-        );
-      } else {
-        final secret = res['agent_secret']?.toString() ?? '';
-        if (secret.isNotEmpty) {
-          await showDialog<void>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              backgroundColor: const Color(0xFF1e293b),
-              title: const Text(
-                'Секрет агента',
-                style: TextStyle(color: Color(0xFFf1f5f9)),
-              ),
-              content: SingleChildScrollView(
-                child: SelectableText(
-                  '$secret\n\nПубличная однострочная установка не настроена на API. '
-                  'Сохраните секрет и см. README Planulix Cloud (install.sh + вручную).',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontFamily: 'monospace',
-                    color: Color(0xFFe2e8f0),
-                  ),
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () async {
-                    await Clipboard.setData(ClipboardData(text: secret));
-                    if (ctx.mounted) Navigator.pop(ctx);
-                  },
-                  child: const Text('Копировать секрет'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Закрыть'),
-                ),
-              ],
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('$e')));
-      }
-    } finally {
-      if (mounted) setState(() => _saasBusy = false);
-    }
-  }
-
-  Future<void> _saasInstallCommandFor(
-    BuildContext context,
-    AppState state,
-    String serverId,
-  ) async {
-    setState(() => _saasBusy = true);
-    try {
-      final res = await state.saas.requestInstallCommand(serverId);
-      if (!context.mounted) return;
-      final err = res['error']?.toString();
-      if (err != null && err.isNotEmpty) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(err)));
-        return;
-      }
-      final cmd = res['install_command']?.toString() ?? '';
-      if (cmd.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Команда недоступна: на API задайте PUBLIC_API_BASE, PUBLIC_DOWNLOAD_BASE, PUBLIC_GATEWAY_WSS',
-            ),
-          ),
-        );
-        return;
-      }
-      await _showAgentInstallSheet(
-        context,
-        cmd,
-        subtitle:
-            'Одноразовая ссылка; после запуска curl старый секрет агента перестанет работать.',
-      );
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('$e')));
-      }
-    } finally {
-      if (mounted) setState(() => _saasBusy = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
@@ -424,13 +292,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const Icon(Icons.terminal, size: 64, color: Color(0xFF8b5cf6)),
             const SizedBox(height: 16),
             const Text(
-              'Подключение к Planulix / Planulix Cloud',
+              'Подключение к Planulix',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
             const Text(
-              'Сессии Kimi Code и Claude Code с вашего сервера: Direct или Planulix Cloud',
+              'Открытый исходный код: свой gateway на сервере, клиент ниже задаёт только URL API и Bearer-токен.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Color(0xFF94a3b8)),
             ),
@@ -438,514 +306,342 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
 
           const Text(
-            'Режим подключения',
+            'Как подготовить доступ к gateway',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
+            runSpacing: 8,
             children: [
               ChoiceChip(
-                label: const Text('Direct (Planulix API)'),
-                selected: state.connectionMode == 'direct',
-                onSelected: (_) async {
-                  await state.setConnectionMode('direct');
-                  if (mounted) setState(() => _syncControllersFromApi(state));
-                },
+                label: const Text('Tailscale'),
+                selected: _connectViaTailscale,
+                onSelected: (_) => setState(() => _connectViaTailscale = true),
               ),
               ChoiceChip(
-                label: const Text('Planulix Cloud'),
-                selected: state.connectionMode == 'saas',
-                onSelected: (_) async {
-                  await state.setConnectionMode('saas');
-                  if (mounted) setState(() {});
-                },
+                label: const Text('SSH · сборка на сервере'),
+                selected: !_connectViaTailscale,
+                onSelected: (_) => setState(() => _connectViaTailscale = false),
               ),
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            state.connectionMode == 'saas'
-                ? 'Вход в Planulix Cloud: список серверов, онлайн и лимиты. Чат по сессиям — через профиль Direct к тому же Planulix на машине.'
-                : 'Классика: клиент ходит на ваш Planulix-сервер (URL + токен) — так смотрите сессии Kimi и Claude.',
-            style: const TextStyle(fontSize: 11, color: Color(0xFF64748b)),
+          const Text(
+            'Независимо от способа внизу укажите один и тот же Server URL (/api в конце) и Auth Token с сервера.',
+            style: TextStyle(fontSize: 11, color: Color(0xFF64748b)),
           ),
-
-          if (state.connectionMode == 'saas') ...[
-            const SizedBox(height: 20),
-            const Text(
-              'Planulix Cloud API URL',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _saasUrlController,
-              decoration: _inputDecoration('https://api.example.com'),
-              style: const TextStyle(fontSize: 14, fontFamily: 'monospace'),
-            ),
-            const SizedBox(height: 8),
-            FilledButton.tonal(
-              onPressed: _saasBusy
-                  ? null
-                  : () async {
-                      final messenger = ScaffoldMessenger.of(context);
-                      await state.persistSaasConnection(
-                        baseUrl: _saasUrlController.text.trim(),
-                      );
-                      if (!mounted) return;
-                      setState(() {});
-                      messenger.showSnackBar(
-                        const SnackBar(content: Text('SaaS API URL saved')),
-                      );
-                    },
-              child: const Text('Save SaaS URL'),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Login',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _saasEmailController,
-              keyboardType: TextInputType.emailAddress,
-              decoration: _inputDecoration('Email'),
-              style: const TextStyle(color: Color(0xFFe2e8f0)),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _saasPasswordController,
-              obscureText: true,
-              decoration: _inputDecoration('Password'),
-              style: const TextStyle(color: Color(0xFFe2e8f0)),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                FilledButton(
-                  onPressed: _saasBusy
-                      ? null
-                      : () async {
-                          final messenger = ScaffoldMessenger.of(context);
-                          setState(() => _saasBusy = true);
-                          await state.saasLogin(
-                            _saasEmailController.text.trim(),
-                            _saasPasswordController.text,
-                          );
-                          if (!mounted) return;
-                          setState(() => _saasBusy = false);
-                          if (state.error != null) {
-                            messenger.showSnackBar(
-                              SnackBar(content: Text(state.error!)),
-                            );
-                          }
-                        },
-                  child: const Text('Sign in'),
-                ),
-                const SizedBox(width: 12),
-                OutlinedButton(
-                  onPressed: _saasBusy
-                      ? null
-                      : () async {
-                          await state.saasLogout();
-                          if (mounted) setState(() {});
-                        },
-                  child: const Text('Sign out'),
-                ),
-              ],
-            ),
-            if (state.saasMe != null) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Signed in: ${state.saasMe!['email'] ?? ''}\n'
-                'Tenant: ${state.saasMe!['tenant_name'] ?? ''} · Kimi: ${state.saasMe!['kimi_mode'] ?? ''}',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF94a3b8)),
+          const SizedBox(height: 12),
+          if (_connectViaTailscale)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1e293b),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF334155)),
               ),
-              const SizedBox(height: 12),
-              Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  FilledButton.tonal(
-                    onPressed: _saasBusy
-                        ? null
-                        : () async {
-                            await state.refreshSaasWorkspaces();
-                            if (mounted) setState(() {});
-                          },
-                    child: const Text('Обновить список'),
+                  const Text(
+                    'Адреса вида 100.x.x.x — это машина вашего VPS в общей Tailscale-сети. '
+                    'Установите приложение здесь и войдите в тот же tailnet.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.35,
+                      color: Color(0xFFcbd5e1),
+                    ),
                   ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: _saasBusy
-                        ? null
-                        : () => _saasAddServer(context, state),
-                    child: const Text('Добавить сервер'),
+                  const SizedBox(height: 12),
+                  FilledButton.tonalIcon(
+                    onPressed: () => _openUrl(_tailscaleDownloadUrl()),
+                    icon: const Icon(Icons.download_outlined, size: 18),
+                    label: const Text('Клиент Tailscale для этой ОС'),
                   ),
                 ],
               ),
-              if (state.saasWorkspaces.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                const Text(
-                  'Агенты (VPS)',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 6),
-                ...state.saasWorkspaces.map(
-                  (w) => Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Row(
-                      children: [
-                        Icon(
-                          w.online ? Icons.circle : Icons.circle_outlined,
-                          size: 10,
-                          color: w.online
-                              ? Colors.greenAccent
-                              : const Color(0xFF64748b),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            w.name,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Color(0xFFe2e8f0),
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Text(
-                          w.online ? 'online' : 'offline',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: w.online
-                                ? Colors.greenAccent
-                                : const Color(0xFF64748b),
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: 'Команда установки',
-                          onPressed: _saasBusy
-                              ? null
-                              : () => _saasInstallCommandFor(
-                                  context,
-                                  state,
-                                  w.id,
-                                ),
-                          icon: const Icon(
-                            Icons.terminal,
-                            size: 20,
-                            color: Color(0xFF38bdf8),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ],
-
-          if (state.connectionMode == 'direct') ...[
-            const SizedBox(height: 20),
-            const Text(
-              'Server profile',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0f172a),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFF334155)),
-                    ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<ServerProfile>(
-                        isExpanded: true,
-                        dropdownColor: const Color(0xFF1e293b),
-                        value: () {
-                          final id = state.activeProfileId;
-                          if (id == null) return null;
-                          for (final p in state.serverProfiles) {
-                            if (p.id == id) return p;
-                          }
-                          return state.serverProfiles.isEmpty
-                              ? null
-                              : state.serverProfiles.first;
-                        }(),
-                        hint: const Text(
-                          'Select server…',
-                          style: TextStyle(color: Color(0xFF64748b)),
-                        ),
-                        items: state.serverProfiles
-                            .map(
-                              (p) => DropdownMenuItem(
-                                value: p,
-                                child: Text(
-                                  p.name,
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    color: Color(0xFFe2e8f0),
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: state.serverProfiles.isEmpty
-                            ? null
-                            : (p) async {
-                                if (p == null) return;
-                                await state.activateProfile(p);
-                                if (mounted) {
-                                  setState(
-                                    () => _syncControllersFromApi(state),
-                                  );
-                                }
-                              },
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton.filledTonal(
-                  onPressed: _showAddProfileDialog,
-                  icon: const Icon(Icons.add),
-                  style: IconButton.styleFrom(
-                    backgroundColor: const Color(0xFF334155),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Each profile is its own Planulix API (URL + token). Sessions come from the machine running that API.',
-              style: TextStyle(fontSize: 11, color: Color(0xFF64748b)),
-            ),
-
-            const SizedBox(height: 20),
-            const Text(
-              'Session filters',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Agent (whose sessions) and list scope (starred, active, …) apply on the dashboard and desktop sidebar.',
-              style: TextStyle(fontSize: 11, color: Color(0xFF64748b)),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'Agent',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: Color(0xFF94a3b8),
-              ),
-            ),
-            const SizedBox(height: 6),
+            )
+          else
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFF0f172a),
+                color: const Color(0xFF1e293b),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: const Color(0xFF334155)),
               ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  isExpanded: true,
-                  dropdownColor: const Color(0xFF1e293b),
-                  value: kAgentScopeOptions.contains(state.agentScope)
-                      ? state.agentScope
-                      : 'All',
-                  items: kAgentScopeOptions
-                      .map(
-                        (f) => DropdownMenuItem(
-                          value: f,
-                          child: Text(
-                            f,
-                            style: const TextStyle(
-                              color: Color(0xFFe2e8f0),
-                              fontSize: 14,
-                            ),
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) async {
-                    if (v == null) return;
-                    await state.setAgentScope(v);
-                    setState(() {});
-                  },
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            const Text(
-              'List',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: Color(0xFF94a3b8),
-              ),
-            ),
-            const SizedBox(height: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0f172a),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFF334155)),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  isExpanded: true,
-                  dropdownColor: const Color(0xFF1e293b),
-                  value: kListScopeOptions.contains(state.listScope)
-                      ? state.listScope
-                      : 'All',
-                  items: kListScopeOptions
-                      .map(
-                        (f) => DropdownMenuItem(
-                          value: f,
-                          child: Text(
-                            f,
-                            style: const TextStyle(
-                              color: Color(0xFFe2e8f0),
-                              fontSize: 14,
-                            ),
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) async {
-                    if (v == null) return;
-                    await state.setListScope(v);
-                    setState(() {});
-                  },
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 24),
-            const Text(
-              'Server URL',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _urlController,
-              decoration: _inputDecoration('http://100.71.95.33:8990/api'),
-              style: const TextStyle(fontSize: 14, fontFamily: 'monospace'),
-            ),
-            const SizedBox(height: 16),
-
-            const Text(
-              'Auth Token',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _tokenController,
-              decoration: _inputDecoration('Bearer token'),
-              style: const TextStyle(fontSize: 14),
-              obscureText: true,
-            ),
-            const SizedBox(height: 24),
-
-            if (_testResult != null) _testBanner(),
-
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _testing ? null : _testConnection,
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Color(0xFF334155)),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: _testing
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('Test connection'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: _save,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF8b5cf6),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: Text(
-                      widget.isInitial ? 'Save & Connect' : 'Save',
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Сначала на сервере: Go-код в каталоге server репозитория. '
+                    'Сервер требует AUTH_TOKEN в окружении — он же Bearer в клиенте.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.35,
+                      color: Color(0xFFcbd5e1),
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 12),
+                  FilledButton.tonalIcon(
+                    onPressed: () => _showAgentInstallSheet(
+                      context,
+                      _sshGatewaySetupCommands(),
+                      subtitle:
+                          'Подставьте пользователя и IP. После сборки добавьте в клиент этот же токен.',
+                    ),
+                    icon: const Icon(Icons.copy_all_outlined, size: 18),
+                    label: const Text('Команды для SSH-сессии'),
+                  ),
+                ],
+              ),
             ),
-          ],
-
-          const SizedBox(height: 28),
-          const Divider(color: Color(0xFF334155)),
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
           const Text(
-            'Tailscale network',
+            'Server profile',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0f172a),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF334155)),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<ServerProfile>(
+                      isExpanded: true,
+                      dropdownColor: const Color(0xFF1e293b),
+                      value: () {
+                        final id = state.activeProfileId;
+                        if (id == null) return null;
+                        for (final p in state.serverProfiles) {
+                          if (p.id == id) return p;
+                        }
+                        return state.serverProfiles.isEmpty
+                            ? null
+                            : state.serverProfiles.first;
+                      }(),
+                      hint: const Text(
+                        'Select server…',
+                        style: TextStyle(color: Color(0xFF64748b)),
+                      ),
+                      items: state.serverProfiles
+                          .map(
+                            (p) => DropdownMenuItem(
+                              value: p,
+                              child: Text(
+                                p.name,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  color: Color(0xFFe2e8f0),
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: state.serverProfiles.isEmpty
+                          ? null
+                          : (p) async {
+                              if (p == null) return;
+                              await state.activateProfile(p);
+                              if (mounted) {
+                                setState(() => _syncControllersFromApi(state));
+                              }
+                            },
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filledTonal(
+                onPressed: _showAddProfileDialog,
+                icon: const Icon(Icons.add),
+                style: IconButton.styleFrom(
+                  backgroundColor: const Color(0xFF334155),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 8),
+          const Text(
+            'Each profile is its own Planulix API (URL + token). Sessions come from the machine running that API.',
+            style: TextStyle(fontSize: 11, color: Color(0xFF64748b)),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'Session filters',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Agent (whose sessions) and list scope (starred, active, …) apply on the dashboard and desktop sidebar.',
+            style: TextStyle(fontSize: 11, color: Color(0xFF64748b)),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Agent',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF94a3b8),
+            ),
+          ),
+          const SizedBox(height: 6),
           Container(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
-              color: const Color(0xFF1e293b),
+              color: const Color(0xFF0f172a),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: const Color(0xFF334155)),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Addresses like 100.x.x.x only work when this device is logged into the same Tailscale '
-                  'network as the server. Install Tailscale here, sign in, then retry the API URL.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.35,
-                    color: Color(0xFF94a3b8),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    FilledButton.tonalIcon(
-                      onPressed: () => _openUrl(_tailscaleDownloadUrl()),
-                      icon: const Icon(Icons.download_outlined, size: 18),
-                      label: const Text('Install Tailscale'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: () => _openUrl('https://login.tailscale.com/'),
-                      icon: const Icon(Icons.login, size: 18),
-                      label: const Text('Sign in (admin)'),
-                    ),
-                  ],
-                ),
-              ],
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                isExpanded: true,
+                dropdownColor: const Color(0xFF1e293b),
+                value: kAgentScopeOptions.contains(state.agentScope)
+                    ? state.agentScope
+                    : 'All',
+                items: kAgentScopeOptions
+                    .map(
+                      (f) => DropdownMenuItem(
+                        value: f,
+                        child: Text(
+                          f,
+                          style: const TextStyle(
+                            color: Color(0xFFe2e8f0),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (v) async {
+                  if (v == null) return;
+                  await state.setAgentScope(v);
+                  setState(() {});
+                },
+              ),
             ),
           ),
-
+          const SizedBox(height: 14),
+          const Text(
+            'List',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF94a3b8),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0f172a),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF334155)),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                isExpanded: true,
+                dropdownColor: const Color(0xFF1e293b),
+                value: kListScopeOptions.contains(state.listScope)
+                    ? state.listScope
+                    : 'All',
+                items: kListScopeOptions
+                    .map(
+                      (f) => DropdownMenuItem(
+                        value: f,
+                        child: Text(
+                          f,
+                          style: const TextStyle(
+                            color: Color(0xFFe2e8f0),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (v) async {
+                  if (v == null) return;
+                  await state.setListScope(v);
+                  setState(() {});
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          const Text(
+            'Server URL',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _urlController,
+            decoration: _inputDecoration('http://100.x.x.x:8990/api'),
+            style: const TextStyle(fontSize: 14, fontFamily: 'monospace'),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Auth Token',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _tokenController,
+            decoration: _inputDecoration('Bearer token'),
+            style: const TextStyle(fontSize: 14),
+            obscureText: true,
+          ),
+          const SizedBox(height: 24),
+          if (_testResult != null) _testBanner(),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _testing ? null : _testConnection,
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF334155)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: _testing
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Test connection'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton(
+                  onPressed: _save,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF8b5cf6),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: Text(
+                    widget.isInitial ? 'Save & Connect' : 'Save',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 28),
           const SizedBox(height: 16),
           OutlinedButton.icon(
             onPressed: () async {

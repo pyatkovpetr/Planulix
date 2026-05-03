@@ -3,9 +3,11 @@ import 'package:provider/provider.dart';
 
 import '../../providers/app_state.dart';
 
-/// First-launch welcome: positions Planulix as desktop + mobile client for Kimi/Claude sessions; Direct vs Planulix Cloud.
+/// First launch: Planulix — opensource self-hosted, Tailscale vs SSH, затем действия в приложении.
 class ConnectionWelcomeScreen extends StatefulWidget {
   const ConnectionWelcomeScreen({super.key});
+
+  static const stepCount = 4;
 
   @override
   State<ConnectionWelcomeScreen> createState() => _ConnectionWelcomeScreenState();
@@ -28,18 +30,19 @@ class _ConnectionWelcomeScreenState extends State<ConnectionWelcomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isLast = _index >= 2;
+    const n = ConnectionWelcomeScreen.stepCount;
+    final isLast = _index >= n - 1;
     return Scaffold(
       backgroundColor: const Color(0xFF0f172a),
       appBar: AppBar(
         backgroundColor: Colors.transparent,
-        title: Text('Шаг ${_index + 1} из 3', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+        title: Text(
+          'Шаг ${_index + 1} из $n',
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+        ),
         centerTitle: true,
         actions: [
-          TextButton(
-            onPressed: _finish,
-            child: const Text('Пропустить'),
-          ),
+          TextButton(onPressed: _finish, child: const Text('Пропустить')),
         ],
       ),
       body: Column(
@@ -51,28 +54,31 @@ class _ConnectionWelcomeScreenState extends State<ConnectionWelcomeScreen> {
               children: const [
                 _WelcomePage(
                   icon: Icons.rocket_launch_outlined,
-                  title: 'Добро пожаловать в Planulix',
+                  title: 'Planulix — ваш сервер, ваш ключ',
                   body:
-                      'Planulix — десктопный и мобильный клиент для управления сессиями Kimi Code и Claude Code на вашем сервере (остальные coding CLI — опционально). '
-                      'Два режима: напрямую к вашему Planulix API или через облачную панель Planulix Cloud.',
+                      'Открытый исходный код: ставите Gateway (Go) на VPS или домашнюю машину и подключаетесь клиентом. '
+                      'Ключи API агентов (Kimi, Claude…) остаются у вас; Planulix лишь маршрутизирует сессии.',
                 ),
                 _WelcomePage(
-                  icon: Icons.hub_outlined,
-                  title: 'Два способа подключения',
+                  icon: Icons.vpn_key_outlined,
+                  title: 'Через Tailscale',
                   body:
-                      'Прямой (Direct) — URL и токен вашего Planulix-сервера на VPS или локальной машине. '
-                      'Сессии Kimi/Claude и чат идут через него.\n\n'
-                      'Planulix Cloud — вход по email и паролю в control plane: видите зарегистрированные серверы, '
-                      'онлайн-статус и лимиты usage. Чат с сессиями пока открывается в режиме Direct (добавьте профиль того же сервера).',
+                      'Если Gateway в приватной сети Tailscale (адрес 100.x.x.x), на этом же устройстве войдите в Tailscale. '
+                      'Тогда клиент может ходить на http://100.…:8990/api без проброса портов в интернет.',
+                ),
+                _WelcomePage(
+                  icon: Icons.terminal_outlined,
+                  title: 'Через SSH на сервер',
+                  body:
+                      'Подключитесь по SSH и соберите бинарь из репозитория (каталог server). Обязательно задайте AUTH_TOKEN — без него процесс не стартует. '
+                      'Дальше в клиенте укажите публичный URL или LAN/Tailscale-адрес с суффиксом /api и тот же токен в поле Bearer.',
                 ),
                 _WelcomePage(
                   icon: Icons.check_circle_outline,
-                  title: 'Что сделать дальше',
+                  title: 'Дальше в приложении',
                   body:
-                      '1. Откройте «Настройки» и выберите режим.\n'
-                      '2. Для Direct: введите URL вида https://…:8990/api и AUTH_TOKEN с сервера.\n'
-                      '3. Для Planulix Cloud: сохраните URL API (без /api), войдите — затем на VPS установите агент по README репозитория Planulix Cloud.\n'
-                      '4. На вкладке «Sessions» выберите источник сессий: в первую очередь Kimi Code или Claude Code (или другой CLI).',
+                      'На экране «Подключение» выберите подсказки Tailscale или SSH, введите Server URL и Auth Token, нажмите «Save & Connect». '
+                      'При необходимости заполните «Ключи CLI-агентов». На вкладке Sessions начните с Kimi Code или Claude Code.',
                 ),
               ],
             ),
@@ -81,7 +87,7 @@ class _ConnectionWelcomeScreenState extends State<ConnectionWelcomeScreen> {
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
             child: Row(
               children: [
-                ...List.generate(3, (i) {
+                ...List.generate(n, (i) {
                   return Expanded(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 3),
@@ -112,7 +118,10 @@ class _ConnectionWelcomeScreenState extends State<ConnectionWelcomeScreen> {
                   if (isLast) {
                     await _finish();
                   } else {
-                    await _page.nextPage(duration: const Duration(milliseconds: 280), curve: Curves.easeOutCubic);
+                    await _page.nextPage(
+                      duration: const Duration(milliseconds: 280),
+                      curve: Curves.easeOutCubic,
+                    );
                   }
                 },
                 child: Text(isLast ? 'Понятно, поехали' : 'Далее'),

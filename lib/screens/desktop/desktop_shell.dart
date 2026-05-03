@@ -16,6 +16,7 @@ import '../explorer/command_palette.dart';
 import '../explorer/terminal_panel.dart';
 import '../chat/claude_chat_panel.dart';
 import '../../widgets/resizable_divider.dart';
+import '../onboarding/agent_welcome_screen.dart';
 import '../onboarding/connection_welcome_screen.dart';
 
 class DesktopShell extends StatefulWidget {
@@ -57,17 +58,28 @@ class _DesktopShellState extends State<DesktopShell> {
   Future<void> _bootstrapDesktop() async {
     if (!mounted) return;
     final state = context.read<AppState>();
-    if (state.connectionMode == 'saas') {
-      await state.refreshSaasWorkspaces();
-    } else {
-      await state.refreshSessions();
-    }
+    await state.refreshSessions();
     if (!mounted || !state.isConfigured) return;
-    if (state.welcomeOnboardingDone) return;
-    await Navigator.of(context).push<void>(
+    if (!state.welcomeOnboardingDone) {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          fullscreenDialog: true,
+          builder: (_) => const ConnectionWelcomeScreen(),
+        ),
+      );
+      if (!mounted) return;
+    }
+    _maybeDesktopAgentWelcome();
+  }
+
+  void _maybeDesktopAgentWelcome() {
+    if (!mounted) return;
+    final state = context.read<AppState>();
+    if (!state.isConfigured || state.agentOnboardingDone) return;
+    Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         fullscreenDialog: true,
-        builder: (_) => const ConnectionWelcomeScreen(),
+        builder: (_) => const AgentWelcomeScreen(),
       ),
     );
   }

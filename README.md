@@ -61,5 +61,4 @@ Bug reports and feature requests are welcome.
 - [ ] Web client
 - [ ] Team / shared sessions
 - [ ] Advanced analytics & insights
-- [ ] Planulix Cloud (managed hosting)
 - [ ] Plugins and extensions

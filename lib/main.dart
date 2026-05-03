@@ -44,7 +44,7 @@ class PlanulixApp extends StatelessWidget {
           builder: (context, state, _) {
             if (state.isLoading &&
                 state.sessions.isEmpty &&
-                !(state.connectionMode == 'saas' && state.saas.isConfigured)) {
+                state.api.isConfigured) {
               return const Scaffold(
                 body: Center(child: CircularProgressIndicator()),
               );
@@ -106,10 +106,6 @@ class MainShellState extends State<MainShell> {
     if (width >= 900) return;
     final state = context.read<AppState>();
     if (!state.isConfigured || state.agentOnboardingDone) return;
-    if (state.connectionMode == 'saas' && !state.api.isConfigured) {
-      unawaited(state.completeAgentOnboarding());
-      return;
-    }
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         fullscreenDialog: true,
