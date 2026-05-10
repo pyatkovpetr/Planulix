@@ -52,6 +52,7 @@ func (s *SessionServer) CloneGitHubRepo(c *gin.Context) {
 			c.JSON(409, gin.H{"error": "project already exists", "path": targetDir})
 			return
 		}
+		_ = normalizeProjectWritable(targetDir)
 		if err := os.RemoveAll(targetDir); err != nil {
 			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to remove existing: %v", err)})
 			return
@@ -77,8 +78,25 @@ func (s *SessionServer) CloneGitHubRepo(c *gin.Context) {
 		return
 	}
 	_ = out
+	if err := normalizeProjectWritable(targetDir); err != nil {
+		c.JSON(500, gin.H{"error": fmt.Sprintf("normalize project permissions: %v", err), "path": targetDir})
+		return
+	}
+	_ = exec.CommandContext(ctx, "git", "-C", targetDir, "config", "--local", "core.sharedRepository", "false").Run()
+	_ = exec.CommandContext(ctx, "git", "-C", targetDir, "config", "--local", "core.fileMode", "true").Run()
+	gitWritable, gitWritableError := probeGitWritable(targetDir)
+	if !gitWritable {
+		c.JSON(500, gin.H{
+			"error":            "clone completed but .git is not writable",
+			"path":             targetDir,
+			"gitWritable":      false,
+			"gitWritableError": gitWritableError,
+			"repairSuggestion": "Run POST /api/projects/repair?name=" + name + " or fix filesystem mount/owner on the server.",
+		})
+		return
+	}
 
-	c.JSON(200, gin.H{"ok": true, "path": targetDir})
+	c.JSON(200, gin.H{"ok": true, "path": targetDir, "gitWritable": true})
 }
 
 func injectGitHubHTTPSAuth(httpsURL, token string) string {

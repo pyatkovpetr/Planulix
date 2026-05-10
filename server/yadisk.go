@@ -252,6 +252,7 @@ func (s *SessionServer) ImportFromYadisk(c *gin.Context) {
 			c.JSON(409, gin.H{"error": "project already exists", "path": targetDir})
 			return
 		}
+		_ = normalizeProjectWritable(targetDir)
 		os.RemoveAll(targetDir)
 	}
 	os.MkdirAll(targetDir, 0755)
@@ -332,7 +333,12 @@ func (s *SessionServer) ImportFromYadisk(c *gin.Context) {
 			os.MkdirAll(target, 0755)
 		case tar.TypeReg:
 			os.MkdirAll(filepath.Dir(target), 0755)
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode&0777))
+			mode := os.FileMode(header.Mode & 0777)
+			if mode == 0 {
+				mode = 0644
+			}
+			mode |= 0600
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 			if err != nil {
 				continue
 			}
@@ -350,6 +356,11 @@ func (s *SessionServer) ImportFromYadisk(c *gin.Context) {
 			os.MkdirAll(filepath.Dir(target), 0755)
 			os.Symlink(header.Linkname, target)
 		}
+	}
+
+	if err := normalizeProjectWritable(targetDir); err != nil {
+		c.JSON(500, gin.H{"error": fmt.Sprintf("normalize project permissions: %v", err), "path": targetDir})
+		return
 	}
 
 	// Optional: delete archive from Yandex Disk after successful import

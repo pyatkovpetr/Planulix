@@ -10,7 +10,9 @@ import '../../providers/app_state.dart';
 import '../../services/ssh_vps_socks_tunnel.dart';
 import '../../utils/capabilities_helpers.dart';
 import '../../utils/chat_models.dart';
+import '../../utils/message_content_blocks.dart';
 import '../../utils/session_agent.dart';
+import '../../widgets/message_markdown.dart';
 
 class ClaudeChatPanel extends StatefulWidget {
   final String? projectPath;
@@ -413,18 +415,7 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
 
   static String _rawMessageContentKey(dynamic msg) {
     if (msg is! Map) return '';
-    final content = msg['content'];
-    if (content is String) return content.trim();
-    if (content is List) {
-      final b = StringBuffer();
-      for (final block in content) {
-        if (block is Map && block['type'] == 'text') {
-          b.write((block['text'] ?? '').toString());
-        }
-      }
-      return b.toString().trim();
-    }
-    return '';
+    return messageContentPlainText(msg['content']).trim();
   }
 
   static String _messageContentKeyKimi(dynamic msg) =>
@@ -1815,74 +1806,11 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
       color: Color(0xFFcbd5e1),
       height: 1.4,
     );
-    final onOpen = widget.onPathOpen;
-    if (text.isEmpty) {
-      return const SelectableText('...', style: baseStyle);
-    }
-    if (onOpen == null) {
-      return SelectableText(text, style: baseStyle);
-    }
-    final matches = _chatPathRegex.allMatches(text).toList();
-    if (matches.isEmpty) {
-      return SelectableText(text, style: baseStyle);
-    }
-
-    final children = <Widget>[];
-    var lastEnd = 0;
-    for (final m in matches) {
-      if (m.start > lastEnd) {
-        final chunk = text.substring(lastEnd, m.start);
-        if (chunk.isNotEmpty) {
-          children.add(SelectableText(chunk, style: baseStyle));
-        }
-      }
-      final path = m.group(0)!;
-      children.add(
-        Align(
-          alignment: Alignment.centerLeft,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: TextButton.icon(
-              onPressed: () => onOpen(path),
-              icon: const Icon(
-                Icons.insert_drive_file_outlined,
-                size: 14,
-                color: Color(0xFF60a5fa),
-              ),
-              label: Text(
-                path,
-                overflow: TextOverflow.ellipsis,
-                maxLines: 3,
-                style: const TextStyle(
-                  fontSize: 10,
-                  fontFamily: 'monospace',
-                  color: Color(0xFF60a5fa),
-                  decoration: TextDecoration.underline,
-                  height: 1.3,
-                ),
-              ),
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFF60a5fa),
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                alignment: Alignment.centerLeft,
-              ),
-            ),
-          ),
-        ),
-      );
-      lastEnd = m.end;
-    }
-    if (lastEnd < text.length) {
-      final chunk = text.substring(lastEnd);
-      if (chunk.isNotEmpty) {
-        children.add(SelectableText(chunk, style: baseStyle));
-      }
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: children,
+    return MessageMarkdown(
+      text: text,
+      baseStyle: baseStyle,
+      pathRegex: _chatPathRegex,
+      onPathOpen: widget.onPathOpen,
     );
   }
 
@@ -1938,16 +1866,7 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
     final pending = msg['pending'] == true;
     final content = msg['content'];
 
-    String text = '';
-    if (content is String) {
-      text = content;
-    } else if (content is List) {
-      for (final block in content) {
-        if (block is Map && block['type'] == 'text') {
-          text += (block['text'] ?? '').toString();
-        }
-      }
-    }
+    var text = messageContentPlainText(content);
     final scope = Provider.of<AppState>(context, listen: false).agentScope;
     if (scope == 'Kimi') {
       text = _kimiNormalizeLiteralEscapes(text);

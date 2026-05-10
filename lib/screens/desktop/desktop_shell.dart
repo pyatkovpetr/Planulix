@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../providers/app_state.dart';
 import '../../utils/capabilities_helpers.dart';
+import '../../utils/session_control.dart';
 import '../../utils/session_filter.dart';
 import '../session/session_screen.dart';
 import '../cost/cost_screen.dart';
@@ -898,6 +899,11 @@ class _DesktopShellState extends State<DesktopShell> {
     final extra = session['extra'] as Map<String, dynamic>?;
     final isStarred = extra != null && extra['starred'] == true;
     final isSelected = _activeTabId == 'session:$id';
+    final sessionMap = Map<String, dynamic>.from(session as Map);
+    final agentLabel = sessionAgentLabel(sessionMap);
+    final branch = sessionBranchLabel(sessionMap);
+    final diffFiles = sessionDiffFiles(sessionMap);
+    final failureReason = sessionFailureReason(sessionMap);
 
     final parts = cwd.split('/').where((s) => s.isNotEmpty).toList();
     final shortCwd = parts.isNotEmpty ? parts.last : cwd;
@@ -1000,12 +1006,47 @@ class _DesktopShellState extends State<DesktopShell> {
                             ),
                           ),
                         ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 1,
+                        ),
+                        margin: const EdgeInsets.only(left: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0f172a),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                        child: Text(
+                          agentLabel,
+                          style: const TextStyle(
+                            fontSize: 8,
+                            color: Color(0xFF94a3b8),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ),
             ),
           ),
+          if (branch.isNotEmpty || diffFiles > 0 || failureReason.isNotEmpty)
+            Tooltip(
+              message: [
+                if (branch.isNotEmpty) 'branch: $branch',
+                if (diffFiles > 0) 'diff: $diffFiles files',
+                if (failureReason.isNotEmpty) failureReason,
+              ].join('\n'),
+              child: Icon(
+                failureReason.isNotEmpty
+                    ? Icons.error_outline
+                    : Icons.account_tree_outlined,
+                size: 14,
+                color: failureReason.isNotEmpty
+                    ? const Color(0xFFf87171)
+                    : const Color(0xFF64748b),
+              ),
+            ),
           Material(
             color: Colors.transparent,
             child: InkWell(
@@ -1269,6 +1310,8 @@ class _DesktopShellState extends State<DesktopShell> {
     final cwdController = TextEditingController(text: cwdDefault);
     final promptController = TextEditingController();
     String selectedMode = 'task';
+    bool generatingSpec = false;
+    String? generatedSpecPath;
 
     showDialog(
       context: context,
@@ -1335,10 +1378,70 @@ class _DesktopShellState extends State<DesktopShell> {
                   maxLines: 4,
                   minLines: 3,
                 ),
+                if (generatedSpecPath != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Spec saved: $generatedSpecPath',
+                    style: const TextStyle(
+                      color: Color(0xFF86efac),
+                      fontSize: 11,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
                 const SizedBox(height: 16),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
+                    OutlinedButton.icon(
+                      onPressed: generatingSpec
+                          ? null
+                          : () async {
+                              final rawPrompt = promptController.text.trim();
+                              if (rawPrompt.isEmpty) return;
+                              setDialogState(() => generatingSpec = true);
+                              final agentId = setupAgentIdForScope(
+                                state.agentScope,
+                              );
+                              final modelScope = state.agentScope == 'All'
+                                  ? 'Claude'
+                                  : state.agentScope;
+                              final model = state
+                                  .modelsForAgent(modelScope)
+                                  .first
+                                  .id;
+                              final spec = await state.createTaskSpec(
+                                cwd: cwdController.text.trim().isEmpty
+                                    ? cwdDefault
+                                    : cwdController.text.trim(),
+                                prompt: rawPrompt,
+                                name: nameController.text,
+                                model: model,
+                                agent: agentId.isEmpty ? null : agentId,
+                              );
+                              if (!ctx.mounted) return;
+                              setDialogState(() => generatingSpec = false);
+                              final launchPrompt = (spec?['launchPrompt'] ?? '')
+                                  .toString();
+                              if (launchPrompt.isNotEmpty) {
+                                promptController.text = launchPrompt;
+                              }
+                              setDialogState(
+                                () => generatedSpecPath = (spec?['path'] ?? '')
+                                    .toString(),
+                              );
+                            },
+                      icon: generatingSpec
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.fact_check_outlined, size: 16),
+                      label: const Text('Make Plan'),
+                    ),
+                    const SizedBox(width: 8),
                     TextButton(
                       onPressed: () => Navigator.pop(ctx),
                       child: const Text('Cancel'),

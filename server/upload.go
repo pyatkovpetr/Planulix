@@ -46,6 +46,7 @@ func (s *SessionServer) UploadProject(c *gin.Context) {
 			c.JSON(409, gin.H{"error": "project already exists", "path": targetDir})
 			return
 		}
+		_ = normalizeProjectWritable(targetDir)
 		// Remove existing
 		if err := os.RemoveAll(targetDir); err != nil {
 			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to remove existing: %v", err)})
@@ -116,7 +117,12 @@ func (s *SessionServer) UploadProject(c *gin.Context) {
 				c.JSON(500, gin.H{"error": fmt.Sprintf("mkdir parent: %v", err)})
 				return
 			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode&0777))
+			mode := os.FileMode(header.Mode & 0777)
+			if mode == 0 {
+				mode = 0644
+			}
+			mode |= 0600
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 			if err != nil {
 				c.JSON(500, gin.H{"error": fmt.Sprintf("create file: %v", err)})
 				return
@@ -133,6 +139,11 @@ func (s *SessionServer) UploadProject(c *gin.Context) {
 			os.MkdirAll(filepath.Dir(target), 0755)
 			os.Symlink(header.Linkname, target)
 		}
+	}
+
+	if err := normalizeProjectWritable(targetDir); err != nil {
+		c.JSON(500, gin.H{"error": fmt.Sprintf("normalize project permissions: %v", err)})
+		return
 	}
 
 	c.JSON(200, gin.H{
@@ -197,6 +208,7 @@ func (s *SessionServer) DeleteProject(c *gin.Context) {
 		return
 	}
 
+	_ = normalizeProjectWritable(targetDir)
 	if err := os.RemoveAll(targetDir); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

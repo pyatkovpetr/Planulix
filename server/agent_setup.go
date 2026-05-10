@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -46,20 +47,63 @@ func commandPath(candidates ...string) string {
 	return ""
 }
 
+func agentUserBinPaths(home string, extra ...string) []string {
+	home = strings.TrimSpace(home)
+	if home == "" {
+		home = claudeSubprocessHome()
+	}
+	paths := make([]string, 0, len(extra)+4)
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return
+		}
+		paths = append(paths, p)
+	}
+	if home != "" {
+		add(filepath.Join(home, ".opencode", "bin"))
+		add(filepath.Join(home, ".local", "bin"))
+		add(filepath.Join(home, ".npm-global", "bin"))
+		add(filepath.Join(home, ".bun", "bin"))
+	}
+	for _, p := range extra {
+		add(p)
+	}
+	add("/usr/local/bin")
+	return paths
+}
+
+func commandPathWithDirs(command string, dirs ...string) string {
+	var candidates []string
+	candidates = append(candidates, command)
+	for _, dir := range dirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		candidates = append(candidates, filepath.Join(dir, command))
+	}
+	return commandPath(candidates...)
+}
+
 func resolveAgentCommand(id string) string {
+	home := claudeSubprocessHome()
 	switch strings.TrimSpace(id) {
 	case "claude-code", "claude":
 		return resolveClaudeBinary()
 	case "kimi-cli", "kimi":
-		return commandPath("kimi", kimiBinDefault, "/opt/kimi-cli/bin/kimi")
+		return commandPathWithDirs("kimi", append(agentUserBinPaths(home, "/opt/kimi-cli/bin"), filepath.Dir(kimiBinDefault))...)
 	case "codex-cli", "codex":
-		return commandPath("codex")
+		return commandPathWithDirs("codex", agentUserBinPaths(home)...)
 	case "cursor":
-		return commandPath("agent")
+		return commandPathWithDirs("agent", agentUserBinPaths(home)...)
 	case "opencode":
-		return commandPath("opencode")
+		return commandPathWithDirs("opencode", agentUserBinPaths(home)...)
 	case "kiro-cli", "kiro":
-		return commandPath("kiro-cli", "kiro")
+		if p := commandPathWithDirs("kiro-cli", agentUserBinPaths(home)...); p != "" {
+			return p
+		}
+		return commandPathWithDirs("kiro", agentUserBinPaths(home)...)
 	default:
 		return ""
 	}
@@ -140,8 +184,9 @@ agent --version 2>/dev/null || true`,
 			InstallBody: `set -euo pipefail
 FORCE="${PLANULIX_AGENT_FORCE_UPDATE:-0}"
 if [ "$FORCE" != "1" ] && command -v opencode >/dev/null 2>&1; then opencode --version || true; exit 0; fi
+mkdir -p "$HOME/.local/bin"
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL https://opencode.ai/install | bash || true
+  curl -fsSL https://opencode.ai/install | bash || echo "WARN: OpenCode install script failed; trying package-manager fallback" >&2
 fi
 export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:$PATH"
 if [ -f "$HOME/.profile" ]; then . "$HOME/.profile" >/dev/null 2>&1 || true; fi
@@ -156,6 +201,19 @@ if ! command -v opencode >/dev/null 2>&1; then
 fi
 if ! command -v opencode >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
   npm i -g opencode-ai@latest
+  hash -r
+fi
+if ! command -v opencode >/dev/null 2>&1 && command -v bun >/dev/null 2>&1; then
+  bun install -g opencode-ai
+  export PATH="$HOME/.bun/bin:$PATH"
+  hash -r
+fi
+if ! command -v opencode >/dev/null 2>&1 && command -v pnpm >/dev/null 2>&1; then
+  pnpm install -g opencode-ai
+  hash -r
+fi
+if ! command -v opencode >/dev/null 2>&1 && command -v brew >/dev/null 2>&1; then
+  brew install anomalyco/tap/opencode
   hash -r
 fi
 command -v opencode >/dev/null 2>&1
@@ -224,10 +282,13 @@ func (s *SessionServer) InstallAgentCLI(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-lc", spec.InstallBody)
+	home := claudeSubprocessHome()
+	pathFront := agentUserBinPaths(home, "/usr/bin", "/bin", "/root/.local/bin")
 	cmd.Env = append(os.Environ(),
 		"DEBIAN_FRONTEND=noninteractive",
+		"HOME="+home,
 		fmt.Sprintf("PLANULIX_AGENT_FORCE_UPDATE=%d", map[bool]int{true: 1, false: 0}[force]),
-		"PATH="+augmentPathFront(claudeSubprocessHome(), os.Getenv("PATH"), "/usr/local/bin", "/usr/bin", "/bin", "/root/.local/bin"),
+		"PATH="+augmentPathFront(home, os.Getenv("PATH"), pathFront...),
 	)
 	out, err := cmd.CombinedOutput()
 	logStr := strings.TrimSpace(stripANSI(string(out)))
@@ -236,9 +297,9 @@ func (s *SessionServer) InstallAgentCLI(c *gin.Context) {
 	if err == nil && installedPath != "" {
 		smoke = runAndStoreAgentSmokeTest(spec.ID, 90*time.Second)
 	}
-	ok = err == nil && installedPath != "" && smoke.OK
+	installedOK := err == nil && installedPath != ""
 	payload := gin.H{
-		"ok":        ok,
+		"ok":        installedOK,
 		"agent":     spec.ID,
 		"label":     spec.Label,
 		"command":   spec.Command,
@@ -246,14 +307,14 @@ func (s *SessionServer) InstallAgentCLI(c *gin.Context) {
 		"log":       logStr,
 		"notes":     spec.Notes,
 		"installed": installedPath != "",
-		"ready":     ok,
+		"ready":     installedOK && smoke.OK,
 		"smoke":     smoke,
 		"updated":   force,
 	}
 	if err != nil {
 		payload["error"] = err.Error()
 	} else if installedPath != "" && !smoke.OK {
-		payload["error"] = "CLI installed but smoke test failed; authorize/configure the agent and run the test again"
+		payload["warning"] = "CLI installed but smoke test failed; authorize/configure the agent and run the test again"
 	}
 	c.JSON(200, payload)
 }

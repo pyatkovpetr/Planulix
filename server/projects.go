@@ -2,12 +2,15 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -495,4 +498,55 @@ func (s *SessionServer) GetGitLog(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{"commits": commits})
+}
+
+type gitPullBody struct {
+	Cwd      string `json:"cwd"`
+	Strategy string `json:"strategy"` // "ff-only" (default), "rebase", "merge"
+}
+
+func (s *SessionServer) GitPull(c *gin.Context) {
+	var body gitPullBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		body.Cwd = c.Query("cwd")
+		body.Strategy = c.Query("strategy")
+	}
+	cwd := normalizeSessionCwd(body.Cwd)
+	if strings.TrimSpace(cwd) == "" {
+		c.JSON(400, gin.H{"error": "cwd is required"})
+		return
+	}
+	if _, ok := projectRootForPath(cwd); !ok {
+		c.JSON(400, gin.H{"error": "git pull is only allowed inside ~/projects/<name>", "cwd": cwd})
+		return
+	}
+	if err := ensureProjectWritableForAgent(cwd); err != nil {
+		c.JSON(500, gin.H{"error": fmt.Sprintf("project permission repair failed: %v", err), "cwd": cwd})
+		return
+	}
+
+	args := []string{"-C", cwd, "pull"}
+	switch strings.ToLower(strings.TrimSpace(body.Strategy)) {
+	case "", "ff-only":
+		args = append(args, "--ff-only")
+	case "rebase":
+		args = append(args, "--rebase")
+	case "merge":
+		// Git default merge behavior.
+	default:
+		c.JSON(400, gin.H{"error": "strategy must be one of: ff-only, rebase, merge"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	output := sanitizeGitErr(string(out))
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error(), "output": output, "cwd": cwd})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true, "cwd": cwd, "output": output})
 }

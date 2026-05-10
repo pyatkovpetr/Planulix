@@ -242,19 +242,99 @@ func messageContentText(content interface{}) string {
 		for _, item := range v {
 			switch x := item.(type) {
 			case string:
+				if strings.TrimSpace(x) == "" {
+					continue
+				}
+				if b.Len() > 0 {
+					b.WriteString("\n\n")
+				}
 				b.WriteString(x)
 			case map[string]interface{}:
-				if x["type"] == "text" {
-					if txt, ok := x["text"].(string); ok {
-						b.WriteString(txt)
-					}
-				}
+				appendAnthropicContentBlock(&b, x)
 			}
 		}
 		return b.String()
 	default:
 		return ""
 	}
+}
+
+func appendAnthropicContentBlock(b *strings.Builder, x map[string]interface{}) {
+	typ, _ := x["type"].(string)
+	sep := func() {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+	}
+	switch typ {
+	case "text":
+		if txt, ok := x["text"].(string); ok && txt != "" {
+			sep()
+			b.WriteString(txt)
+		}
+	case "thinking":
+		th := strings.TrimSpace(getStringFlexible(x["thinking"]))
+		if th == "" {
+			th = strings.TrimSpace(getStringFlexible(x["text"]))
+		}
+		if th != "" {
+			sep()
+			b.WriteString("[thinking]\n")
+			b.WriteString(th)
+		}
+	case "redacted_thinking":
+		sep()
+		b.WriteString("[thinking — redacted]")
+	case "tool_use":
+		name := strings.TrimSpace(getStringFlexible(x["name"]))
+		if name == "" {
+			name = "tool"
+		}
+		sep()
+		fmt.Fprintf(b, "[tool_use: %s]", name)
+		if input, ok := x["input"]; ok && input != nil {
+			if detail := toolInputSummary(input, 500); detail != "" {
+				b.WriteString("\n")
+				b.WriteString(detail)
+			}
+		}
+	case "tool_result":
+		sub := strings.TrimSpace(messageContentText(x["content"]))
+		if sub != "" {
+			sep()
+			b.WriteString(sub)
+		}
+	default:
+		// ignore unknown block shapes
+	}
+}
+
+func getStringFlexible(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	default:
+		return ""
+	}
+}
+
+func toolInputSummary(input interface{}, max int) string {
+	var s string
+	switch v := input.(type) {
+	case string:
+		s = v
+	default:
+		bs, err := json.Marshal(v)
+		if err != nil {
+			s = fmt.Sprint(v)
+		} else {
+			s = string(bs)
+		}
+	}
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
 }
 
 func titleFromContent(content interface{}) string {
@@ -277,10 +357,21 @@ func (s *SessionServer) CollectSessionsList(limit int) ([]SessionInfo, int) {
 		limit = 50
 	}
 	sessions := s.discoverAllAgentSessions()
+	managedHistoryPaths := map[string]bool{}
+	if s.agentStore != nil {
+		for _, rec := range s.agentStore.List() {
+			if strings.HasPrefix(rec.ID, "cd-") && strings.TrimSpace(rec.HistoryPath) != "" {
+				managedHistoryPaths[rec.HistoryPath] = true
+			}
+		}
+	}
 
 	// Add managed tmux sessions
 	s.mu.RLock()
 	for _, ts := range s.tmuxSessions {
+		if strings.HasPrefix(ts.ID, "cd-") && strings.TrimSpace(ts.HistoryPath) != "" {
+			managedHistoryPaths[ts.HistoryPath] = true
+		}
 		found := false
 		for i, sess := range sessions {
 			if sess.SessionID == ts.ID {
@@ -360,12 +451,13 @@ func (s *SessionServer) CollectSessionsList(limit int) ([]SessionInfo, int) {
 		pn, pp := inferProjectInfo(sess.Cwd)
 		sessions[i].ProjectName = pn
 		sessions[i].ProjectPath = pp
+		if sessions[i].Extra == nil {
+			sessions[i].Extra = make(map[string]interface{})
+		}
+		s.enrichSessionControlCenter(&sessions[i])
 		if st, ok := allTags[sess.SessionID]; ok {
 			if st.Title != "" {
 				sessions[i].Title = st.Title
-			}
-			if sessions[i].Extra == nil {
-				sessions[i].Extra = make(map[string]interface{})
 			}
 			sessions[i].Extra["starred"] = st.Starred
 			sessions[i].Extra["tags"] = st.Tags
@@ -380,6 +472,11 @@ func (s *SessionServer) CollectSessionsList(limit int) ([]SessionInfo, int) {
 	for _, sess := range sessions {
 		if s.tags.Get(sess.SessionID).Hidden {
 			continue
+		}
+		if !strings.HasPrefix(sess.SessionID, "cd-") && sess.Extra != nil {
+			if p, _ := sess.Extra["path"].(string); p != "" && managedHistoryPaths[p] {
+				continue
+			}
 		}
 		filtered = append(filtered, sess)
 	}
@@ -400,6 +497,52 @@ func (s *SessionServer) CollectSessionsList(limit int) ([]SessionInfo, int) {
 		sessions = sessions[:limit]
 	}
 	return sessions, total
+}
+
+func (s *SessionServer) enrichSessionControlCenter(sess *SessionInfo) {
+	if sess == nil || sess.Extra == nil {
+		return
+	}
+	cwd := strings.TrimSpace(sess.Cwd)
+	if cwd == "" {
+		if s.agentStore != nil {
+			if rec := s.agentStore.Get(sess.SessionID); rec != nil {
+				cwd = strings.TrimSpace(rec.Cwd)
+				sess.Cwd = cwd
+			}
+		}
+	}
+	if sess.ProjectName == "" || sess.ProjectPath == "" {
+		sess.ProjectName, sess.ProjectPath = inferProjectInfo(cwd)
+	}
+	if cwd != "" {
+		sess.Extra["worktree"] = cwd
+		git := gitControlStatusForPath(cwd)
+		if git.IsGit {
+			sess.Extra["git"] = git
+			sess.Extra["branch"] = git.Branch
+			sess.Extra["gitWritable"] = git.GitWritable
+			sess.Extra["commitStatus"] = git.CommitStatus
+			sess.Extra["pushStatus"] = git.PushStatus
+			sess.Extra["diffFiles"] = git.Modified + git.Untracked
+			if git.Error != "" || git.GitWritableError != "" {
+				if git.Error != "" {
+					sess.Extra["failureReason"] = git.Error
+				} else {
+					sess.Extra["failureReason"] = git.GitWritableError
+				}
+			}
+		}
+	}
+	if sess.StartedAt > 0 {
+		elapsed := time.Now().UnixMilli() - sess.StartedAt
+		if elapsed >= 0 {
+			sess.Extra["elapsedMs"] = elapsed
+		}
+	}
+	if a, _ := sess.Extra["agent"].(string); a == "" && sess.Kind != "" {
+		sess.Extra["agent"] = sess.Kind
+	}
 }
 
 // ListSessions returns all Claude Code sessions found in ~/.claude/
@@ -526,6 +669,10 @@ func (s *SessionServer) CreateSession(c *gin.Context) {
 	}
 
 	req.Cwd = normalizeSessionCwd(req.Cwd)
+	if err := ensureProjectWritableForAgent(req.Cwd); err != nil {
+		c.JSON(500, gin.H{"error": fmt.Sprintf("project permission repair failed: %v", err), "cwd": req.Cwd})
+		return
+	}
 	if req.Mode == "" {
 		req.Mode = "chat"
 	}
@@ -642,6 +789,9 @@ func (s *SessionServer) linkGenericAgentSession(managedID, tmuxName, cwd, agent 
 				s.persistManaged(ts)
 			}
 			s.mu.Unlock()
+			// Planulix shows the managed cd-* row. Hide the raw agent history row
+			// so Codex/Kiro/OpenCode do not appear as duplicate phantom sessions.
+			s.markSessionHidden(sess.SessionID)
 			log.Printf("Linked managed session %s -> %s history %s (cwd=%s)", managedID, agent, p, cwd)
 			return
 		}
@@ -812,6 +962,119 @@ func runAgentTaskSendResult(agent, cwd, text string, agentEnv map[string]string,
 	}
 	log.Printf("%s task send [%s] ok (bytes=%d)", agent, logCtx, len(outStr))
 	return outStr, nil
+}
+
+func (s *SessionServer) discoveredAgentHistoryPaths(agent string) map[string]bool {
+	paths := map[string]bool{}
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return paths
+	}
+
+	agent = normalizeRequestedAgent(agent, "")
+	walk := func(root string, ok func(path string, info os.FileInfo) bool) {
+		_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info == nil || info.IsDir() || !ok(path, info) {
+				return nil
+			}
+			paths[path] = true
+			return nil
+		})
+	}
+
+	switch agent {
+	case "claude-code":
+		walk(filepath.Join(s.claudeHome, "projects"), func(_ string, info os.FileInfo) bool {
+			return strings.HasSuffix(info.Name(), ".jsonl")
+		})
+	case "kimi-cli":
+		walk(filepath.Join(home, ".kimi", "sessions"), func(path string, info os.FileInfo) bool {
+			return info.Name() == "context.jsonl" && strings.Contains(path, string(filepath.Separator)+"sessions"+string(filepath.Separator))
+		})
+	case "codex-cli":
+		walk(filepath.Join(home, ".codex"), func(_ string, info os.FileInfo) bool {
+			return strings.HasSuffix(info.Name(), ".jsonl")
+		})
+	case "cursor":
+		walk(filepath.Join(home, ".cursor", "projects"), func(path string, info os.FileInfo) bool {
+			return strings.HasSuffix(info.Name(), ".jsonl") && strings.Contains(path, "agent-transcripts")
+		})
+	case "kiro-cli":
+		kiroRoots := []string{
+			filepath.Join(home, "Library", "Application Support", "kiro-cli"),
+			filepath.Join(home, ".local", "share", "kiro-cli"),
+		}
+		for _, root := range kiroRoots {
+			walk(root, func(_ string, info os.FileInfo) bool {
+				return strings.HasSuffix(info.Name(), ".jsonl") || strings.HasSuffix(info.Name(), ".json")
+			})
+		}
+	case "opencode":
+		walk(filepath.Join(home, ".local", "share", "opencode"), func(_ string, info os.FileInfo) bool {
+			return strings.HasSuffix(info.Name(), ".jsonl") || strings.HasSuffix(info.Name(), ".json")
+		})
+	}
+
+	return paths
+}
+
+func discoveredAgentSessionIDFromPath(agent, path string) string {
+	agent = normalizeRequestedAgent(agent, "")
+	base := filepath.Base(path)
+	switch agent {
+	case "claude-code":
+		base = strings.TrimSuffix(base, ".jsonl")
+		if base == "" {
+			return ""
+		}
+		return base
+	case "kimi-cli":
+		sid := filepath.Base(filepath.Dir(path))
+		if sid == "" || sid == "." || sid == string(filepath.Separator) {
+			return ""
+		}
+		return "kimi-" + sid
+	case "codex-cli":
+		base = strings.TrimSuffix(base, ".jsonl")
+		if base == "" {
+			return ""
+		}
+		return "codex-" + base
+	case "cursor":
+		base = strings.TrimSuffix(base, ".jsonl")
+		if base == "" {
+			return ""
+		}
+		return "cursor-" + base
+	case "kiro-cli":
+		base = strings.TrimSuffix(strings.TrimSuffix(base, ".jsonl"), ".json")
+		if base == "" {
+			return ""
+		}
+		return "kiro-" + base
+	case "opencode":
+		base = strings.TrimSuffix(strings.TrimSuffix(base, ".jsonl"), ".json")
+		if base == "" {
+			return ""
+		}
+		return "opencode-" + base
+	default:
+		return ""
+	}
+}
+
+func (s *SessionServer) hideNewAgentExecSessions(agent string, before map[string]bool) {
+	if before == nil {
+		return
+	}
+	for path := range s.discoveredAgentHistoryPaths(agent) {
+		if before[path] {
+			continue
+		}
+		if id := discoveredAgentSessionIDFromPath(agent, path); id != "" {
+			s.markSessionHidden(id)
+		}
+	}
 }
 
 func codexCleanExecOutput(stdout string) string {
@@ -1213,6 +1476,10 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 			cwd = rec.Cwd
 		}
 		cwd = normalizeSessionCwd(cwd)
+		if err := ensureProjectWritableForAgent(cwd); err != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("project permission repair failed: %v", err), "cwd": cwd})
+			return
+		}
 
 		isKimi := agentName == "kimi-cli" || strings.HasPrefix(id, "kimi-") || strings.HasPrefix(canon, "kimi-")
 		if isKimi {
@@ -1227,7 +1494,9 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 			}
 			if uuid == "" {
 				agentEnv := mergeAgentEnvPreferred(req.AgentEnv, nil)
+				before := s.discoveredAgentHistoryPaths("kimi-cli")
 				answer, err := runAgentTaskSendResult("kimi-cli", cwd, req.Text, agentEnv, req.Model, "unlinked-fallback")
+				s.hideNewAgentExecSessions("kimi-cli", before)
 				if err != nil {
 					c.JSON(409, gin.H{"error": "kimi session not linked yet; wait a few seconds and retry", "diagnostics": gin.H{
 						"historyLinked": jsonlPath != "",
@@ -1248,6 +1517,11 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 				home, _ := os.UserHomeDir()
 				cwd = home
 			}
+			cwd = normalizeSessionCwd(cwd)
+			if err := ensureProjectWritableForAgent(cwd); err != nil {
+				c.JSON(500, gin.H{"error": fmt.Sprintf("project permission repair failed: %v", err), "cwd": cwd})
+				return
+			}
 			agentEnv := mergeAgentEnvPreferred(req.AgentEnv, nil)
 			model := strings.TrimSpace(req.Model)
 			answer, err := s.runKimiResumeSendResult(cwd, uuid, req.Text, agentEnv, model, "unmanaged")
@@ -1263,7 +1537,9 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 				home, _ := os.UserHomeDir()
 				cwd = home
 			}
+			before := s.discoveredAgentHistoryPaths("cursor")
 			answer, err := runAgentTaskSendResult("cursor", cwd, req.Text, req.AgentEnv, req.Model, "unmanaged")
+			s.hideNewAgentExecSessions("cursor", before)
 			if err != nil {
 				c.JSON(502, gin.H{"error": err.Error()})
 				return
@@ -1282,7 +1558,9 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 				cwd = home
 			}
 			agentEnv := mergeAgentEnvPreferred(req.AgentEnv, nil)
+			before := s.discoveredAgentHistoryPaths(agentName)
 			answer, err := runAgentTaskSendResult(agentName, cwd, req.Text, agentEnv, req.Model, "detached-exec-fallback")
+			s.hideNewAgentExecSessions(agentName, before)
 			if err != nil {
 				c.JSON(502, gin.H{"error": err.Error()})
 				return
@@ -1299,7 +1577,9 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 			jsonlPath = s.findSessionJSONL(id)
 		}
 		if jsonlPath == "" {
+			before := s.discoveredAgentHistoryPaths("claude-code")
 			answer, err := runAgentTaskSendResult("claude-code", cwd, req.Text, req.AgentEnv, req.Model, "unlinked-fallback")
+			s.hideNewAgentExecSessions("claude-code", before)
 			if err != nil {
 				c.JSON(404, gin.H{"error": "session not found", "fallbackError": err.Error()})
 				return
@@ -1314,7 +1594,9 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 			claudeSessionID = rec.ClaudeSessionID
 		}
 		if strings.HasPrefix(id, "cd-") && (rec == nil || strings.TrimSpace(rec.ClaudeSessionID) == "") {
+			before := s.discoveredAgentHistoryPaths("claude-code")
 			answer, err := runAgentTaskSendResult("claude-code", cwd, req.Text, req.AgentEnv, req.Model, "stored-unlinked-fallback")
+			s.hideNewAgentExecSessions("claude-code", before)
 			if err != nil {
 				c.JSON(409, gin.H{"error": "claude session not linked yet; wait a few seconds and retry", "fallbackError": err.Error()})
 				return
@@ -1332,6 +1614,11 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 		if cwd == "" {
 			home, _ := os.UserHomeDir()
 			cwd = home
+		}
+		cwd = normalizeSessionCwd(cwd)
+		if err := ensureProjectWritableForAgent(cwd); err != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("project permission repair failed: %v", err), "cwd": cwd})
+			return
 		}
 
 		agentEnv := req.AgentEnv
@@ -1397,6 +1684,11 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 			home, _ := os.UserHomeDir()
 			cwd = home
 		}
+		cwd = normalizeSessionCwd(cwd)
+		if err := ensureProjectWritableForAgent(cwd); err != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("project permission repair failed: %v", err), "cwd": cwd})
+			return
+		}
 		agentEnv := mergeAgentEnvPreferred(req.AgentEnv, ts.ResumeEnv)
 		model := strings.TrimSpace(req.Model)
 		if model == "" {
@@ -1417,7 +1709,14 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 		if model == "" {
 			model = ts.Model
 		}
-		answer, err := runAgentTaskSendResult("cursor", ts.Cwd, req.Text, req.AgentEnv, model, "managed-tmux")
+		cwd := normalizeSessionCwd(ts.Cwd)
+		if err := ensureProjectWritableForAgent(cwd); err != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("project permission repair failed: %v", err), "cwd": cwd})
+			return
+		}
+		before := s.discoveredAgentHistoryPaths("cursor")
+		answer, err := runAgentTaskSendResult("cursor", cwd, req.Text, req.AgentEnv, model, "managed-tmux")
+		s.hideNewAgentExecSessions("cursor", before)
 		if err != nil {
 			c.JSON(502, gin.H{"error": err.Error()})
 			return
@@ -1429,12 +1728,18 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 
 	if managedAgent == "codex-cli" || managedAgent == "kiro-cli" || managedAgent == "opencode" {
 		cwd := normalizeSessionCwd(ts.Cwd)
+		if err := ensureProjectWritableForAgent(cwd); err != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("project permission repair failed: %v", err), "cwd": cwd})
+			return
+		}
 		model := strings.TrimSpace(req.Model)
 		if model == "" {
 			model = ts.Model
 		}
 		agentEnv := mergeAgentEnvPreferred(req.AgentEnv, ts.ResumeEnv)
+		before := s.discoveredAgentHistoryPaths(managedAgent)
 		answer, err := runAgentTaskSendResult(managedAgent, cwd, req.Text, agentEnv, model, "managed-exec-fallback")
+		s.hideNewAgentExecSessions(managedAgent, before)
 		if err != nil {
 			c.JSON(502, gin.H{"error": err.Error()})
 			return
@@ -1473,6 +1778,10 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 		}
 		if strings.TrimSpace(ts.ClaudeSession) == "" {
 			cwd := normalizeSessionCwd(ts.Cwd)
+			if err := ensureProjectWritableForAgent(cwd); err != nil {
+				c.JSON(500, gin.H{"error": fmt.Sprintf("project permission repair failed: %v", err), "cwd": cwd})
+				return
+			}
 			model := strings.TrimSpace(req.Model)
 			if model == "" {
 				model = ts.Model
@@ -1493,6 +1802,11 @@ func (s *SessionServer) SendMessage(c *gin.Context) {
 		if cwd == "" {
 			home, _ := os.UserHomeDir()
 			cwd = home
+		}
+		cwd = normalizeSessionCwd(cwd)
+		if err := ensureProjectWritableForAgent(cwd); err != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("project permission repair failed: %v", err), "cwd": cwd})
+			return
 		}
 		model := strings.TrimSpace(req.Model)
 		if model == "" {

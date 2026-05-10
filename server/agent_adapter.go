@@ -186,6 +186,64 @@ func codexCLIModelFlag(agentEnv map[string]string, model string) string {
 	return fmt.Sprintf(" --model %q", m)
 }
 
+func envBoolDefault(name string, def bool) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	switch v {
+	case "":
+		return def
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
+}
+
+func agentEnvName(agent, suffix string) string {
+	id := strings.ToUpper(strings.NewReplacer("-", "_").Replace(normalizeRequestedAgent(agent, "")))
+	return "PLANULIX_" + id + "_" + suffix
+}
+
+func agentFullAccessEnabled(agent string) bool {
+	return envBoolDefault(agentEnvName(agent, "FULL_ACCESS"), envBoolDefault("PLANULIX_AGENT_FULL_ACCESS", true))
+}
+
+func codexCLISandboxMode() string {
+	mode := strings.TrimSpace(os.Getenv("PLANULIX_CODEX_CLI_SANDBOX"))
+	if mode == "" {
+		mode = strings.TrimSpace(os.Getenv("PLANULIX_CODEX_SANDBOX"))
+	}
+	if mode == "" {
+		mode = strings.TrimSpace(os.Getenv("PLANULIX_AGENT_SANDBOX"))
+	}
+	switch mode {
+	case "read-only", "workspace-write", "danger-full-access":
+		return mode
+	default:
+		// Planulix is used for project maintenance and DevOps tasks (git pull, package installs,
+		// build scripts). Codex' workspace-write sandbox blocks some of those operations and
+		// the agent cannot remount itself from inside a session.
+		if !agentFullAccessEnabled("codex-cli") {
+			return "workspace-write"
+		}
+		return "danger-full-access"
+	}
+}
+
+func codexCLIAccessFlags(execMode bool) string {
+	if agentFullAccessEnabled("codex-cli") &&
+		strings.TrimSpace(os.Getenv("PLANULIX_CODEX_CLI_SANDBOX")) == "" &&
+		strings.TrimSpace(os.Getenv("PLANULIX_CODEX_SANDBOX")) == "" &&
+		strings.TrimSpace(os.Getenv("PLANULIX_AGENT_SANDBOX")) == "" {
+		return " --dangerously-bypass-approvals-and-sandbox"
+	}
+	if execMode && codexCLISandboxMode() == "danger-full-access" {
+		return " --dangerously-bypass-approvals-and-sandbox"
+	}
+	return fmt.Sprintf(" --sandbox %q", codexCLISandboxMode())
+}
+
 // cursorCLIAllowedModel rejects Anthropic/Kimi/other provider ids accidentally sent while a Claude tab/model picker is visible.
 func cursorCLIAllowedModel(model string) string {
 	m := modelFlagValue(model)
@@ -226,7 +284,11 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 		// Do not pass -m here. Kimi Code validates model names against the server-side
 		// ~/.kimi/config.toml; UI/provider ids frequently do not match local aliases and
 		// make a new chat die before it can be linked.
-		base := fmt.Sprintf("%s -w %q -y", kimiBinDefault, cwd)
+		trustFlag := ""
+		if agentFullAccessEnabled("kimi-cli") {
+			trustFlag = " -y"
+		}
+		base := fmt.Sprintf("%s -w %q%s", kimiBinDefault, cwd, trustFlag)
 		env = mergeSessionExports(kimiEnvWithAuth(), shellExportsFromAgentEnv(agentEnv))
 		if mode == "task" {
 			if prompt == "" {
@@ -249,9 +311,13 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 			if prompt == "" {
 				return "", "", fmt.Errorf("prompt is required for task mode")
 			}
-			return fmt.Sprintf("%s exec --cd %q --sandbox workspace-write --skip-git-repo-check%s %q", q, cwd, modelFlag, prompt), env, nil
+			return fmt.Sprintf("%s exec --cd %q%s --ephemeral --skip-git-repo-check%s %q", q, cwd, codexCLIAccessFlags(true), modelFlag, prompt), env, nil
 		}
-		return fmt.Sprintf("%s --cd %q --sandbox workspace-write%s", q, cwd, modelFlag), env, nil
+		approvalFlag := ""
+		if strings.Contains(codexCLIAccessFlags(false), "bypass-approvals") {
+			approvalFlag = " --ask-for-approval never"
+		}
+		return fmt.Sprintf("%s --cd %q%s%s%s", q, cwd, codexCLIAccessFlags(false), approvalFlag, modelFlag), env, nil
 	case "cursor":
 		bin := resolveAgentCommand("cursor")
 		if bin == "" {
@@ -262,12 +328,16 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 		if m := cursorCLIAllowedModel(model); m != "" {
 			modelFlag = fmt.Sprintf(" --model %q", m)
 		}
+		forceFlag := ""
+		if agentFullAccessEnabled("cursor") {
+			forceFlag = " --force"
+		}
 		q := strconv.Quote(bin)
 		if mode == "task" {
 			if prompt == "" {
 				return "", "", fmt.Errorf("prompt is required for task mode")
 			}
-			return fmt.Sprintf("%s -p --force%s %q", q, modelFlag, prompt), env, nil
+			return fmt.Sprintf("%s -p%s%s %q", q, forceFlag, modelFlag, prompt), env, nil
 		}
 		return fmt.Sprintf("%s%s", q, modelFlag), env, nil
 	case "kiro-cli":
@@ -277,13 +347,17 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 		}
 		env = genericAgentExports(agentEnv)
 		q := strconv.Quote(bin)
+		trustFlag := ""
+		if agentFullAccessEnabled("kiro-cli") {
+			trustFlag = " --trust-all-tools"
+		}
 		if mode == "task" {
 			if prompt == "" {
 				return "", "", fmt.Errorf("prompt is required for task mode")
 			}
-			return fmt.Sprintf("%s chat --no-interactive --trust-all-tools %q", q, prompt), env, nil
+			return fmt.Sprintf("%s chat --no-interactive%s %q", q, trustFlag, prompt), env, nil
 		}
-		return fmt.Sprintf("%s chat --trust-all-tools", q), env, nil
+		return fmt.Sprintf("%s chat%s", q, trustFlag), env, nil
 	case "opencode":
 		bin := resolveAgentCommand("opencode")
 		if bin == "" {
@@ -316,8 +390,14 @@ func buildAgentCommand(agent, mode, cwd, prompt, model string, agentEnv map[stri
 		}
 		env = claudeExportsForShell(agentEnv)
 		q := strconv.Quote(clBin)
-		permissionFlag := " --dangerously-skip-permissions"
-		if os.Geteuid() == 0 {
+		permissionFlag := ""
+		if agentFullAccessEnabled("claude-code") && os.Geteuid() != 0 {
+			permissionFlag = " --dangerously-skip-permissions"
+		}
+		if envBoolDefault("PLANULIX_CLAUDE_FORCE_SKIP_PERMISSIONS", false) {
+			permissionFlag = " --dangerously-skip-permissions"
+		}
+		if !agentFullAccessEnabled("claude-code") {
 			permissionFlag = ""
 		}
 		if mode == "task" {
@@ -341,9 +421,12 @@ func buildClaudeResumeShell(cwd, claudeSessionID, text string, agentEnv map[stri
 	if m := modelFlagValue(model); m != "" {
 		modelFlag = " --model " + m
 	}
-	permissionFlag := " --dangerously-skip-permissions"
-	if os.Geteuid() == 0 {
-		permissionFlag = ""
+	permissionFlag := ""
+	if agentFullAccessEnabled("claude-code") && os.Geteuid() != 0 {
+		permissionFlag = " --dangerously-skip-permissions"
+	}
+	if envBoolDefault("PLANULIX_CLAUDE_FORCE_SKIP_PERMISSIONS", false) && agentFullAccessEnabled("claude-code") {
+		permissionFlag = " --dangerously-skip-permissions"
 	}
 	q := strconv.Quote(clBin)
 	return fmt.Sprintf(
@@ -365,7 +448,11 @@ func kimiAPIID(sessionID string) string {
 // Resume should use the session's stored model / CLI default.
 func buildKimiResumeShell(cwd, sessionUUID, text string, agentEnv map[string]string, _model string) string {
 	env := mergeSessionExports(kimiEnvWithAuth(), shellExportsFromAgentEnv(agentEnv))
-	base := fmt.Sprintf("%s -w %q -y", kimiBinDefault, cwd)
+	trustFlag := ""
+	if agentFullAccessEnabled("kimi-cli") {
+		trustFlag = " -y"
+	}
+	base := fmt.Sprintf("%s -w %q%s", kimiBinDefault, cwd, trustFlag)
 	return fmt.Sprintf(
 		"%s && cd %q && %s --session %q --print -p %q",
 		env, cwd, base, sessionUUID, text,

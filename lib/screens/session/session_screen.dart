@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../providers/app_state.dart';
 import '../../utils/chat_models.dart';
+import '../../utils/message_content_blocks.dart';
+import '../../widgets/message_markdown.dart';
 
 class SessionScreen extends StatefulWidget {
   final String sessionId;
@@ -943,76 +945,11 @@ class _SessionScreenState extends State<SessionScreen> {
   );
 
   Widget _buildRichContent(String content) {
-    final matches = _pathRegex.allMatches(content).toList();
-    if (matches.isEmpty) {
-      return SelectableText(
-        content,
-        style: const TextStyle(fontSize: 13, height: 1.5),
-      );
-    }
-
-    final widgets = <Widget>[];
-    int lastEnd = 0;
-    for (final m in matches) {
-      if (m.start > lastEnd) {
-        final text = content.substring(lastEnd, m.start);
-        if (text.trim().isNotEmpty) {
-          widgets.add(
-            SelectableText(
-              text,
-              style: const TextStyle(fontSize: 13, height: 1.5),
-            ),
-          );
-        }
-      }
-      final path = m.group(0)!;
-      widgets.add(_filePathButton(path));
-      lastEnd = m.end;
-    }
-    if (lastEnd < content.length) {
-      final text = content.substring(lastEnd);
-      if (text.trim().isNotEmpty) {
-        widgets.add(
-          SelectableText(
-            text,
-            style: const TextStyle(fontSize: 13, height: 1.5),
-          ),
-        );
-      }
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: widgets,
-    );
-  }
-
-  Widget _filePathButton(String path) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: TextButton.icon(
-        onPressed: () => _openFile(path),
-        icon: const Icon(Icons.open_in_new, size: 14),
-        label: Text(
-          path,
-          style: const TextStyle(
-            fontSize: 12,
-            fontFamily: 'monospace',
-            decoration: TextDecoration.underline,
-          ),
-        ),
-        style: TextButton.styleFrom(
-          foregroundColor: const Color(0xFF60a5fa),
-          backgroundColor: const Color(0xFF0f172a),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(6),
-            side: const BorderSide(color: Color(0xFF334155)),
-          ),
-          minimumSize: Size.zero,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
-      ),
+    return MessageMarkdown(
+      text: content,
+      baseStyle: const TextStyle(fontSize: 13, height: 1.5),
+      pathRegex: _pathRegex,
+      onPathOpen: _openFile,
     );
   }
 
@@ -1156,28 +1093,7 @@ class _SessionScreenState extends State<SessionScreen> {
   // --- Content extraction ---
 
   String _extractContent(dynamic content) {
-    if (content == null) return '';
-    if (content is String) return content;
-    if (content is List) {
-      final parts = <String>[];
-      for (final item in content) {
-        if (item is String) {
-          parts.add(item);
-        } else if (item is Map) {
-          if (item['type'] == 'text') {
-            final text = item['text'] ?? '';
-            if (text.isNotEmpty) parts.add(text);
-          } else if (item['type'] == 'tool_result') {
-            final rc = item['content'];
-            if (rc is String && rc.isNotEmpty) {
-              parts.add(rc.length > 200 ? '${rc.substring(0, 200)}...' : rc);
-            }
-          }
-        }
-      }
-      return parts.join('\n');
-    }
-    return content.toString();
+    return messageContentPlainText(content, toolDetailMaxChars: 600);
   }
 
   List<Map<String, String>> _extractToolCalls(dynamic content) {

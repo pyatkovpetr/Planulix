@@ -595,6 +595,35 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  Future<Map<String, dynamic>?> createTaskSpec({
+    required String cwd,
+    required String prompt,
+    String? name,
+    String? model,
+    String? agent,
+  }) async {
+    try {
+      final data = await api.createTaskSpec(
+        cwd: cwd,
+        prompt: prompt,
+        title: name,
+        model: model,
+        agent:
+            agent ??
+            (setupAgentIdForScope(agentScope).isEmpty
+                ? null
+                : setupAgentIdForScope(agentScope)),
+      );
+      error = null;
+      notifyListeners();
+      return data;
+    } catch (e) {
+      error = e.toString();
+      notifyListeners();
+      return null;
+    }
+  }
+
   Future<void> sendMessage(
     String sessionId,
     String text, {

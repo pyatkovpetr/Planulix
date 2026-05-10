@@ -2145,6 +2145,7 @@ curl -fsSL $_kPlanulixInstallScript \\
 
     final ok = res?['ok'] == true;
     final installed = res?['installed'] == true;
+    final ready = res?['ready'] == true;
     final smoke = res?['smoke'];
     final smokeLog = smoke is Map ? '${smoke['log'] ?? ''}'.trim() : '';
     final keyKind = _agentApiKeyStoreKey(agentId);
@@ -2154,6 +2155,7 @@ curl -fsSL $_kPlanulixInstallScript \\
     final gatewayNeedsUpdate = res?['gatewayNeedsUpdate'] == true;
     final log = '${res?['log'] ?? ''}'.trim();
     final err = '${res?['error'] ?? ''}'.trim();
+    final warning = '${res?['warning'] ?? ''}'.trim();
     final updateCommand =
         "curl -fsSL https://raw.githubusercontent.com/pyatkovpetr/Planulix/main/scripts/install_gateway_remote.sh | AUTH_TOKEN='${state.api.authToken ?? '<ваш токен>'}' bash -";
 
@@ -2162,9 +2164,9 @@ curl -fsSL $_kPlanulixInstallScript \\
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1e293b),
         title: Text(
-          ok
+          ok && ready
               ? (force ? '$label обновлён' : '$label установлен')
-              : installed
+              : ok || installed
               ? '$label установлен, но не готов'
               : 'Установка не удалась полностью',
           style: const TextStyle(color: Color(0xFFf1f5f9), fontSize: 18),
@@ -2215,7 +2217,19 @@ curl -fsSL $_kPlanulixInstallScript \\
                     ),
                   ),
                 ),
-              if (!ok && installed && smokeReason.isNotEmpty) ...[
+              if (warning.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    warning,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFFfde68a),
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              if (!ready && installed && smokeReason.isNotEmpty) ...[
                 Text(
                   smokeReason,
                   style: const TextStyle(
@@ -2256,7 +2270,7 @@ curl -fsSL $_kPlanulixInstallScript \\
           ),
         ),
         actions: [
-          if (!ok && installed && keyKind != null)
+          if (!ready && installed && keyKind != null)
             FilledButton(
               onPressed: () async {
                 Navigator.pop(ctx);
@@ -2304,9 +2318,11 @@ curl -fsSL $_kPlanulixInstallScript \\
       SnackBar(
         content: Text(
           ok
-              ? (force
-                    ? 'Готово. $label обновлён и ответил на тестовое сообщение.'
-                    : 'Готово. $label установлен и ответил на тестовое сообщение.')
+              ? (ready
+                    ? (force
+                          ? 'Готово. $label обновлён и ответил на тестовое сообщение.'
+                          : 'Готово. $label установлен и ответил на тестовое сообщение.')
+                    : '$label установлен. Теперь авторизуйте CLI/API key и запустите тест.')
               : installed
               ? '$label установлен, но пока не готов: авторизуйте CLI и запустите тест.'
               : 'Смотрите лог в диалоге или ставьте CLI вручную по SSH.',

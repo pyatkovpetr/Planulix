@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../providers/app_state.dart';
 import '../../utils/agent_catalog.dart';
 import '../../utils/capabilities_helpers.dart';
+import '../../utils/session_control.dart';
 import '../../utils/session_filter.dart';
 import '../../widgets/activity_heatmap.dart';
 import '../session/session_screen.dart';
@@ -866,6 +867,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final extra = session['extra'] as Map<String, dynamic>?;
     final isStarred = extra != null && extra['starred'] == true;
     final tags = (extra?['tags'] as List?)?.cast<String>() ?? [];
+    final sessionMap = Map<String, dynamic>.from(session as Map);
+    final agentLabel = sessionAgentLabel(sessionMap);
+    final branch = sessionBranchLabel(sessionMap);
+    final diffFiles = sessionDiffFiles(sessionMap);
+    final commitPush = sessionCommitPushLabel(sessionMap);
+    final failureReason = sessionFailureReason(sessionMap);
 
     final cost = state.sessionCostUsd[sessionId];
     final statusColor = isActive
@@ -1043,73 +1050,72 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                   ],
                   const SizedBox(height: 8),
-                  Row(
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
                     children: [
-                      if (cwd.isNotEmpty) ...[
-                        const Icon(
-                          Icons.folder_outlined,
-                          size: 14,
-                          color: Color(0xFF64748b),
+                      _metaChip(Icons.smart_toy_outlined, agentLabel),
+                      if (cwd.isNotEmpty)
+                        _metaChip(Icons.workspaces_outline, cwdDisplay),
+                      if (branch.isNotEmpty)
+                        _metaChip(Icons.account_tree_outlined, branch),
+                      if (diffFiles > 0)
+                        _metaChip(
+                          Icons.difference_outlined,
+                          '$diffFiles files',
                         ),
-                        const SizedBox(width: 4),
-                        Flexible(
-                          child: Text(
-                            cwdDisplay,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF64748b),
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                      const Spacer(),
+                      if (commitPush.isNotEmpty)
+                        _metaChip(Icons.cloud_upload_outlined, commitPush),
                       if (kind.isNotEmpty)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF0f172a),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            kind,
-                            style: const TextStyle(
-                              fontSize: 10,
-                              color: Color(0xFF94a3b8),
-                            ),
-                          ),
-                        ),
-                      if (entry.isNotEmpty) ...[
-                        const SizedBox(width: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF0f172a),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            entry,
-                            style: const TextStyle(
-                              fontSize: 10,
-                              color: Color(0xFF94a3b8),
-                            ),
-                          ),
-                        ),
-                      ],
+                        _metaChip(Icons.layers_outlined, kind),
+                      if (entry.isNotEmpty)
+                        _metaChip(Icons.terminal_outlined, entry),
                     ],
                   ),
+                  if (failureReason.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      failureReason,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFFfca5a5),
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ],
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _metaChip(IconData icon, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0f172a),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFF334155)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: const Color(0xFF94a3b8)),
+          const SizedBox(width: 4),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 170),
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 11, color: Color(0xFFcbd5e1)),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1250,6 +1256,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final kimiModels = state.modelsForAgent('Kimi');
     String selectedClaudeModel = claudeModels.first.id;
     String selectedKimiModel = kimiModels.first.id;
+    bool generatingSpec = false;
+    String? generatedSpecPath;
 
     /// When agent filter is «All», user picks who to create for.
     String createProvider = isAllScope ? 'Claude' : state.agentScope;
@@ -1508,7 +1516,91 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     maxLines: 4,
                     minLines: 2,
                   ),
+                  if (generatedSpecPath != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'План сохранен: $generatedSpecPath',
+                      style: const TextStyle(
+                        color: Color(0xFF86efac),
+                        fontSize: 11,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                   const SizedBox(height: 16),
+
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: generatingSpec
+                          ? null
+                          : () async {
+                              final rawPrompt = promptController.text.trim();
+                              if (rawPrompt.isEmpty) {
+                                ScaffoldMessenger.of(ctx).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Сначала опишите задачу для плана',
+                                    ),
+                                    backgroundColor: Color(0xFFb45309),
+                                  ),
+                                );
+                                return;
+                              }
+                              setSheetState(() => generatingSpec = true);
+                              final agentId = setupAgentIdForScope(
+                                createProvider,
+                              );
+                              final model = isKimi
+                                  ? selectedKimiModel
+                                  : (createProvider == 'Kiro' ||
+                                        createProvider == 'OpenCode')
+                                  ? null
+                                  : selectedClaudeModel;
+                              final spec = await state.createTaskSpec(
+                                cwd: cwdController.text.trim().isEmpty
+                                    ? defaultCwd
+                                    : cwdController.text.trim(),
+                                prompt: rawPrompt,
+                                name: nameController.text,
+                                model: model,
+                                agent: agentId.isEmpty ? null : agentId,
+                              );
+                              if (!ctx.mounted) return;
+                              setSheetState(() => generatingSpec = false);
+                              if (spec == null) {
+                                ScaffoldMessenger.of(ctx).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      state.error ?? 'Не удалось создать план',
+                                    ),
+                                    backgroundColor: const Color(0xFFb91c1c),
+                                  ),
+                                );
+                                return;
+                              }
+                              final launchPrompt = (spec['launchPrompt'] ?? '')
+                                  .toString();
+                              if (launchPrompt.isNotEmpty) {
+                                promptController.text = launchPrompt;
+                              }
+                              setSheetState(
+                                () => generatedSpecPath = (spec['path'] ?? '')
+                                    .toString(),
+                              );
+                            },
+                      icon: generatingSpec
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.fact_check_outlined, size: 18),
+                      label: const Text('Сформировать план задачи'),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
 
                   SizedBox(
                     width: double.infinity,

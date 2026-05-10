@@ -111,7 +111,8 @@ func (s *SessionServer) GetCapabilities(c *gin.Context) {
 	opencodeSmoke := agentSmokeCached("opencode")
 	kiroSmoke := agentSmokeCached("kiro-cli")
 	c.JSON(200, gin.H{
-		"serverVersion": "dev",
+		"serverVersion":  "dev",
+		"agentManifests": agentManifests(),
 		"agents": []CapabilityAgent{
 			{
 				ID:         "claude-code",

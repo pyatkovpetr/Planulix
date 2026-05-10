@@ -195,6 +195,26 @@ class ApiClient {
     return res.data;
   }
 
+  Future<Map<String, dynamic>> createTaskSpec({
+    required String cwd,
+    required String prompt,
+    String? agent,
+    String? model,
+    String? title,
+  }) async {
+    final res = await _dio.post(
+      '/task-specs',
+      data: {
+        'cwd': cwd,
+        'prompt': prompt,
+        if (agent != null && agent.trim().isNotEmpty) 'agent': agent.trim(),
+        if (model != null && model.trim().isNotEmpty) 'model': model.trim(),
+        if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
+      },
+    );
+    return Map<String, dynamic>.from(res.data as Map? ?? {});
+  }
+
   Future<Map<String, dynamic>> sendMessage(
     String sessionId,
     String text, {
@@ -209,7 +229,14 @@ class ApiClient {
     };
     for (var attempt = 0; attempt <= linkRetryAttempts; attempt++) {
       try {
-        final res = await _dio.post('/sessions/$sessionId/message', data: body);
+        final res = await _dio.post(
+          '/sessions/$sessionId/message',
+          data: body,
+          options: Options(
+            // Kimi resume / heavy CLI turns can exceed 120s before first response byte.
+            receiveTimeout: const Duration(minutes: 30),
+          ),
+        );
         return Map<String, dynamic>.from(res.data as Map? ?? {});
       } on DioException catch (e) {
         if (_isSessionLinkRetryable(e) && attempt < linkRetryAttempts) {

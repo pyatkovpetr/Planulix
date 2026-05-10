@@ -139,6 +139,7 @@ func main() {
 	api.GET("/sessions", srv.ListSessions)
 	api.GET("/sessions/:id", srv.GetSession)
 	api.POST("/sessions", srv.CreateSession)
+	api.POST("/task-specs", srv.CreateTaskSpec)
 	api.POST("/sessions/:id/message", srv.SendMessage)
 	api.DELETE("/sessions/:id", srv.StopSession)
 	api.POST("/sessions/:id/interrupt", srv.InterruptSession)
@@ -161,6 +162,7 @@ func main() {
 	api.POST("/projects/clone", srv.CloneGitHubRepo)
 	// Короткий алиас (если прокси/старые клиенты мешают длинному пути).
 	api.POST("/clone", srv.CloneGitHubRepo)
+	api.POST("/projects/repair", srv.RepairProject)
 	api.DELETE("/projects", srv.DeleteProject)
 	api.GET("/disk-info", srv.GetDiskInfo)
 	api.GET("/yadisk/upload-url", srv.GetYadiskUploadURL)
@@ -173,6 +175,7 @@ func main() {
 	api.GET("/git/status", srv.GetGitStatus)
 	api.GET("/git/diff", srv.GetGitDiff)
 	api.GET("/git/log", srv.GetGitLog)
+	api.POST("/git/pull", srv.GitPull)
 	api.GET("/network-info", srv.GetNetworkInfo)
 	api.POST("/upload-image", srv.UploadImage)
 	api.GET("/skills", srv.GetSkills)
