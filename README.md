@@ -123,7 +123,7 @@ go build -o planulix-gateway .
 ## Репозиторий и обратная связь
 
 - **Issues и PR** — приветствуются.
-- Телеграм: [t.me/planulix](https://t.me/planulix)
+- Телеграм: [t.me/VoyagerCode](https://t.me/VoyagerCode)
 - Boosty (донаты / «кофе»): [boosty.to/planulix](https://boosty.to/planulix)
 
 ---
