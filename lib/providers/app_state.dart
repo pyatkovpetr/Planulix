@@ -456,15 +456,23 @@ class AppState extends ChangeNotifier {
     });
   }
 
-  Future<void> configure(String baseUrl, String token) async {
+  Future<void> configure(
+    String baseUrl,
+    String token, {
+    bool refreshNow = true,
+  }) async {
     await api.saveSettings(baseUrl.trim(), token.trim());
     await _ensureProfileForCurrentConnection(name: 'Default');
     notifyListeners();
-    try {
-      await refreshSessions();
-      unawaited(loadCapabilitiesIfNeeded());
-      unawaited(loadPricingIfNeeded());
-    } catch (_) {}
+    if (refreshNow) {
+      try {
+        await refreshSessions();
+      } catch (_) {}
+    } else {
+      unawaited(refreshSessions());
+    }
+    unawaited(loadCapabilitiesIfNeeded());
+    unawaited(loadPricingIfNeeded());
     _startPolling();
   }
 
@@ -586,6 +594,11 @@ class AppState extends ChangeNotifier {
                 : setupAgentIdForScope(agentScope)),
         agentEnv: agentEnvForServer(),
       );
+      if (listScope != 'All') {
+        listScope = 'All';
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_kListScope, listScope);
+      }
       await refreshSessions();
       return true;
     } catch (e) {

@@ -914,6 +914,9 @@ class _ClaudeChatPanelState extends State<ClaudeChatPanel> {
           throw StateError('createSession: missing session.id in response');
         }
         _sessionId = id;
+        if (state.listScope != 'All') {
+          await state.setListScope('All');
+        }
         await state.refreshSessions();
         _subscribeSessionEvents();
       }

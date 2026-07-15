@@ -143,8 +143,7 @@ class ApiClient {
   }
 
   bool get isConfigured {
-    final t = _resolveAuthTokenForRequest();
-    return baseUrl.isNotEmpty && t != null && t.isNotEmpty;
+    return baseUrl.isNotEmpty;
   }
 
   String get baseUrl => _resolvedBaseUrl();
@@ -202,17 +201,26 @@ class ApiClient {
     String? model,
     String? title,
   }) async {
-    final res = await _dio.post(
-      '/task-specs',
-      data: {
-        'cwd': cwd,
-        'prompt': prompt,
-        if (agent != null && agent.trim().isNotEmpty) 'agent': agent.trim(),
-        if (model != null && model.trim().isNotEmpty) 'model': model.trim(),
-        if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
-      },
-    );
-    return Map<String, dynamic>.from(res.data as Map? ?? {});
+    try {
+      final res = await _dio.post(
+        '/task-specs',
+        data: {
+          'cwd': cwd,
+          'prompt': prompt,
+          if (agent != null && agent.trim().isNotEmpty) 'agent': agent.trim(),
+          if (model != null && model.trim().isNotEmpty) 'model': model.trim(),
+          if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
+        },
+      );
+      return Map<String, dynamic>.from(res.data as Map? ?? {});
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        throw Exception(
+          'Gateway не поддерживает /task-specs. Обновите Planulix Gateway на сервере и повторите.',
+        );
+      }
+      throw Exception(_dioErrorMessage(e));
+    }
   }
 
   Future<Map<String, dynamic>> sendMessage(

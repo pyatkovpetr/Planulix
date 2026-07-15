@@ -35,6 +35,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _anthropicKeyController;
   late TextEditingController _openaiKeyController;
   bool _testing = false;
+  bool _saving = false;
   String? _testResult;
   bool _testingKeys = false;
   String? _keysTestResult;
@@ -833,7 +834,7 @@ curl -fsSL $_kPlanulixInstallScript \\
               const SizedBox(width: 12),
               Expanded(
                 child: FilledButton(
-                  onPressed: _save,
+                  onPressed: _saving ? null : _save,
                   style: FilledButton.styleFrom(
                     backgroundColor: const Color(0xFF8b5cf6),
                     padding: const EdgeInsets.symmetric(vertical: 14),
@@ -841,10 +842,16 @@ curl -fsSL $_kPlanulixInstallScript \\
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: Text(
-                    widget.isInitial ? 'Save & Connect' : 'Save',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
+                  child: _saving
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Text(
+                          widget.isInitial ? 'Save & Connect' : 'Save',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
                 ),
               ),
             ],
@@ -1072,7 +1079,6 @@ curl -fsSL $_kPlanulixInstallScript \\
       final testApi = ApiClient(baseUrl: url);
       await testApi.saveSettings(url, token);
       await testApi.pingHealthz(url, timeout: const Duration(seconds: 25));
-      await testApi.getSessions(limit: 1);
       setState(() => _testResult = 'ok');
     } catch (e) {
       setState(() => _testResult = 'URL: ${_urlController.text.trim()}\n$e');
@@ -2332,10 +2338,19 @@ curl -fsSL $_kPlanulixInstallScript \\
   }
 
   Future<void> _save() async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _testResult = null;
+    });
     try {
       final messenger = ScaffoldMessenger.of(context);
       final state = context.read<AppState>();
-      await state.configure(_urlController.text, _tokenController.text);
+      await state.configure(
+        _urlController.text,
+        _tokenController.text,
+        refreshNow: false,
+      );
       final sshPort = int.tryParse(_gatewaySshPortController.text.trim()) ?? 22;
       await state.saveGatewaySshForActiveProfile(
         sshUserRaw: _gatewaySshUserController.text,
@@ -2347,6 +2362,10 @@ curl -fsSL $_kPlanulixInstallScript \\
     } catch (e) {
       if (!context.mounted) return;
       setState(() => _testResult = e.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
     }
   }
 

@@ -869,12 +869,34 @@ class _DesktopShellState extends State<DesktopShell> {
                 ? Center(
                     child: Padding(
                       padding: const EdgeInsets.all(16),
-                      child: Text(
-                        state.isLoading ? 'Loading...' : 'No sessions',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF64748b),
-                        ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            state.isLoading
+                                ? 'Loading...'
+                                : state.sessions.isEmpty
+                                ? 'No sessions'
+                                : 'No sessions match filters',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF64748b),
+                            ),
+                          ),
+                          if (!state.isLoading &&
+                              state.sessions.isNotEmpty &&
+                              state.listScope != 'All') ...[
+                            const SizedBox(height: 8),
+                            TextButton(
+                              onPressed: () async {
+                                await state.setListScope('All');
+                                if (mounted) setState(() {});
+                              },
+                              child: const Text('Show all'),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
                   )
@@ -1398,8 +1420,19 @@ class _DesktopShellState extends State<DesktopShell> {
                       onPressed: generatingSpec
                           ? null
                           : () async {
+                              final messenger = ScaffoldMessenger.of(context);
                               final rawPrompt = promptController.text.trim();
-                              if (rawPrompt.isEmpty) return;
+                              if (rawPrompt.isEmpty) {
+                                messenger.showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Describe the task before making a plan',
+                                    ),
+                                    backgroundColor: Color(0xFFb45309),
+                                  ),
+                                );
+                                return;
+                              }
                               setDialogState(() => generatingSpec = true);
                               final agentId = setupAgentIdForScope(
                                 state.agentScope,
@@ -1422,14 +1455,35 @@ class _DesktopShellState extends State<DesktopShell> {
                               );
                               if (!ctx.mounted) return;
                               setDialogState(() => generatingSpec = false);
-                              final launchPrompt = (spec?['launchPrompt'] ?? '')
+                              if (spec == null) {
+                                final msg =
+                                    state.error ?? 'Failed to create task plan';
+                                messenger.showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      msg.length > 280
+                                          ? '${msg.substring(0, 280)}...'
+                                          : msg,
+                                    ),
+                                    backgroundColor: const Color(0xFFb91c1c),
+                                  ),
+                                );
+                                return;
+                              }
+                              final launchPrompt = (spec['launchPrompt'] ?? '')
                                   .toString();
                               if (launchPrompt.isNotEmpty) {
                                 promptController.text = launchPrompt;
                               }
                               setDialogState(
-                                () => generatedSpecPath = (spec?['path'] ?? '')
+                                () => generatedSpecPath = (spec['path'] ?? '')
                                     .toString(),
+                              );
+                              messenger.showSnackBar(
+                                const SnackBar(
+                                  content: Text('Task plan saved'),
+                                  backgroundColor: Color(0xFF15803d),
+                                ),
                               );
                             },
                       icon: generatingSpec
