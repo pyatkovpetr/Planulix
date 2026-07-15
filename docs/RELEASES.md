@@ -3,6 +3,7 @@
 Готовые сборки публикуются на странице GitHub Releases:
 
 - Latest release: https://github.com/pyatkovpetr/Planulix/releases/latest
+- v1.1.0: [docs/releases/v1.1.0.md](releases/v1.1.0.md)
 - v1.0.0: [docs/releases/v1.0.0.md](releases/v1.0.0.md)
 
 ## Что скачивать

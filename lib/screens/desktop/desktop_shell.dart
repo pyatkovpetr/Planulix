@@ -1311,7 +1311,7 @@ class _DesktopShellState extends State<DesktopShell> {
             const SizedBox(width: 12),
           ],
           const Text(
-            'Planulix v1.0.0',
+            'Planulix v1.1.0',
             style: TextStyle(fontSize: 10, color: Colors.white),
           ),
           const SizedBox(width: 8),

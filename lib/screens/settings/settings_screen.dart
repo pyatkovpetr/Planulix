@@ -1028,7 +1028,7 @@ curl -fsSL $_kPlanulixInstallScript \\
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Planulix v1.0.0',
+                    'Planulix v1.1.0',
                     style: TextStyle(fontWeight: FontWeight.w600),
                   ),
                   SizedBox(height: 4),

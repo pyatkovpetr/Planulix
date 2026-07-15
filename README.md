@@ -85,13 +85,13 @@
 
 ### Скачать готовый релиз
 
-Последний стабильный релиз: **[Planulix v1.0.0](https://github.com/pyatkovpetr/Planulix/releases/tag/v1.0.0)**.
+Последний стабильный релиз: **[Planulix v1.1.0](https://github.com/pyatkovpetr/Planulix/releases/tag/v1.1.0)**.
 
-- **macOS:** скачайте `Planulix-macOS-v1.0.0.zip`, распакуйте и откройте `Planulix.app`. Если macOS предупредит о приложении из интернета, используйте **Open** через контекстное меню Finder.
-- **Android:** скачайте `Planulix-Android-v1.0.0.apk` и установите APK вручную. На устройстве может потребоваться разрешить установку из выбранного браузера/файлового менеджера.
+- **macOS:** скачайте `Planulix-macOS-v1.1.0.zip`, распакуйте и откройте `Planulix.app`. Если macOS предупредит о приложении из интернета, используйте **Open** через контекстное меню Finder.
+- **Android:** скачайте `Planulix-Android-v1.1.0.apk` и установите APK вручную. На устройстве может потребоваться разрешить установку из выбранного браузера/файлового менеджера.
 - **Gateway:** Linux-бинарники публикуются в релизе и также доступны через скрипт установки ниже. Для работы клиента всё равно нужен запущенный self-hosted Gateway и общий `AUTH_TOKEN`.
 
-Подробности релиза и checksums: [`docs/releases/v1.0.0.md`](docs/releases/v1.0.0.md).
+Подробности релиза и checksums: [`docs/releases/v1.1.0.md`](docs/releases/v1.1.0.md).
 
 ### 1. Gateway на Linux (пример через скрипт)
 
