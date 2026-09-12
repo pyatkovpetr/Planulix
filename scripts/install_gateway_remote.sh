@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # Installs / updates Planulix gateway on a Linux VPS.
 #
-# Fast path: download a ready Linux binary from GitHub Releases.
-# Fallback: build from source only if the release asset is not available.
+# Builds the current gateway from source on the VPS.
+# A direct binary URL can be supplied explicitly when needed.
 #
 # Environment:
 #   AUTH_TOKEN              required, shared secret for the app and gateway
 #   PORT                    default: 8990
 #   PLANULIX_HOME           default: ~/.planulix-gateway
 #   PLANULIX_REPO_SLUG      default: pyatkovpetr/Planulix
-#   PLANULIX_RELEASE_TAG    default: gateway-latest
 #   PLANULIX_DOWNLOAD_BASE  optional direct asset base URL
-#   PLANULIX_ALLOW_BUILD_FALLBACK=0 disables source build fallback
+#   PLANULIX_ALLOW_BUILD_FALLBACK=0 disables source fallback for a custom URL
 
 set -euo pipefail
 
@@ -27,8 +26,7 @@ ENV_FILE="$BASE/planulix.env"
 BIN="$BIN_DIR/planulix-gateway"
 SERVICE_NAME="${PLANULIX_SERVICE_NAME:-planulix-gateway}"
 REPO_SLUG="${PLANULIX_REPO_SLUG:-pyatkovpetr/Planulix}"
-RELEASE_TAG="${PLANULIX_RELEASE_TAG:-gateway-latest}"
-DOWNLOAD_BASE="${PLANULIX_DOWNLOAD_BASE:-https://github.com/${REPO_SLUG}/releases/download/${RELEASE_TAG}}"
+DOWNLOAD_BASE="${PLANULIX_DOWNLOAD_BASE:-}"
 ALLOW_BUILD_FALLBACK="${PLANULIX_ALLOW_BUILD_FALLBACK:-1}"
 SOURCE_REPO="${PLANULIX_REPO:-https://github.com/${REPO_SLUG}.git}"
 PLANULIX_GO_VERSION="${PLANULIX_GO_VERSION:-1.25.0}"
@@ -140,9 +138,7 @@ install_go_upstream() {
 }
 
 build_from_source() {
-  [ "$ALLOW_BUILD_FALLBACK" = "1" ] || return 1
-
-  log "Release binary unavailable; falling back to source build"
+  log "Building gateway from source"
   ensure_tool git git
   export PATH="/usr/local/go/bin:${PATH}"
   if ! go_version_ok; then
@@ -224,8 +220,13 @@ start_with_nohup() {
 ensure_tool curl curl ca-certificates
 ensure_tool tar tar
 
-if ! download_binary; then
-  build_from_source || die "Could not download release binary and source build fallback failed" 23
+if [ -n "$DOWNLOAD_BASE" ]; then
+  if ! download_binary; then
+    [ "$ALLOW_BUILD_FALLBACK" = "1" ] || die "Could not download gateway binary" 23
+    build_from_source
+  fi
+else
+  build_from_source
 fi
 
 write_env_file

@@ -159,7 +159,7 @@ ssh user@ваш-сервер-ip
 curl -fsSL $_kPlanulixInstallScript \\
   | AUTH_TOKEN='замените-на-свой-секрет' bash -s
 
-# Скрипт скачает готовый бинарник из GitHub Releases и запустит сервис.
+# Скрипт соберёт gateway из исходников и запустит сервис.
 # В этом приложении Server URL → http://<IP_или_TS>:8990/api
 ''';
   }
@@ -475,7 +475,7 @@ curl -fsSL $_kPlanulixInstallScript \\
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Мастер подключится по SSH, скачает готовый Linux-бинарник из GitHub Releases, '
+                    'Мастер подключится по SSH, соберёт Linux-бинарник из исходников, '
                     'запустит gateway как сервис и сохранит тот же AUTH_TOKEN в приложении.',
                     style: TextStyle(
                       fontSize: 13,
@@ -489,7 +489,7 @@ curl -fsSL $_kPlanulixInstallScript \\
                       context,
                       _sshGatewaySetupCommands(),
                       subtitle:
-                          'Подставьте пользователя, IP и токен. Скрипт скачает готовый бинарник и запустит сервис.',
+                          'Подставьте пользователя, IP и токен. Скрипт соберёт gateway из исходников и запустит сервис.',
                     ),
                     icon: const Icon(Icons.copy_all_outlined, size: 18),
                     label: const Text('Команды для SSH-сессии'),
@@ -617,7 +617,7 @@ curl -fsSL $_kPlanulixInstallScript \\
                   ),
                   const SizedBox(height: 6),
                   const Text(
-                    'Это Go-бинарник на VPS. Обновление клиента из GitHub не обновляет уже запущенный gateway автоматически: повторно выполните install script на сервере, он скачает свежий release/соберёт fallback и перезапустит сервис.',
+                    'Это Go-бинарник на VPS. Обновление клиента из GitHub не обновляет уже запущенный gateway автоматически: повторно выполните install script на сервере, он соберёт свежий gateway из исходников и перезапустит сервис.',
                     style: TextStyle(
                       fontSize: 12,
                       height: 1.35,

@@ -9,7 +9,7 @@ import '../providers/app_state.dart';
 import '../services/remote_gateway_installer.dart';
 
 /// Мастер: установка gateway на VPS по SSH и автоподключение клиента (только desktop).
-/// Основной путь быстрый: скачать готовый Linux-бинарник из GitHub Releases.
+/// Установщик собирает актуальный gateway из исходников на Linux VPS.
 class VpsGatewayWizardDialog extends StatefulWidget {
   const VpsGatewayWizardDialog({super.key, required this.installScript});
 
@@ -271,7 +271,7 @@ class _VpsGatewayWizardDialogState extends State<VpsGatewayWizardDialog> {
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
       children: [
         const Text(
-          'Нужен Linux VPS с SSH. Мастер скачает готовый gateway-бинарник из GitHub Releases, '
+          'Нужен Linux VPS с SSH. Мастер соберёт gateway из исходников, '
           'запустит его через systemd (или nohup fallback) и проверит /healthz. '
           'Если используете Tailscale, введите Tailscale-IP сервера (100.x.x.x).',
           style: TextStyle(fontSize: 13, color: Color(0xFF94a3b8), height: 1.35),
