@@ -10,6 +10,7 @@
 #   PLANULIX_HOME           default: ~/.planulix-gateway
 #   PLANULIX_REPO_SLUG      default: pyatkovpetr/Planulix
 #   PLANULIX_DOWNLOAD_BASE  optional direct asset base URL
+#   PLANULIX_RELEASE_TAG    optional existing GitHub release asset tag
 #   PLANULIX_ALLOW_BUILD_FALLBACK=0 disables source fallback for a custom URL
 
 set -euo pipefail
@@ -27,6 +28,9 @@ BIN="$BIN_DIR/planulix-gateway"
 SERVICE_NAME="${PLANULIX_SERVICE_NAME:-planulix-gateway}"
 REPO_SLUG="${PLANULIX_REPO_SLUG:-pyatkovpetr/Planulix}"
 DOWNLOAD_BASE="${PLANULIX_DOWNLOAD_BASE:-}"
+if [ -z "$DOWNLOAD_BASE" ] && [ -n "${PLANULIX_RELEASE_TAG:-}" ]; then
+  DOWNLOAD_BASE="https://github.com/${REPO_SLUG}/releases/download/${PLANULIX_RELEASE_TAG}"
+fi
 ALLOW_BUILD_FALLBACK="${PLANULIX_ALLOW_BUILD_FALLBACK:-1}"
 SOURCE_REPO="${PLANULIX_REPO:-https://github.com/${REPO_SLUG}.git}"
 PLANULIX_GO_VERSION="${PLANULIX_GO_VERSION:-1.25.0}"
